@@ -197,6 +197,8 @@ static void process_cheat_codebreaker(cheat_type *cheat, u16 pad)
 void process_cheats(void)
 {
    u32 i;
+   extern u32 gba_idle_sidefx;
+   gba_idle_sidefx++;     /* writes memory directly (src/porting/gba_idle.c) */
 
    for(i = 0; i <= max_cheat; i++)
    {

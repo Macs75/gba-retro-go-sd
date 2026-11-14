@@ -60,6 +60,7 @@ extern "C" {
  * Core/Src/porting/gba/gba_bios_hle.c — same idea as the M4A HLE: meaning on
  * the host, guest cycles charged. SoftReset / Halt / IntrWait stay in BIOS. */
 extern "C" int gba_bios_hle(unsigned number, unsigned *regs, int *cycles);
+#include "gba_idle.h"
 
 /* Apply a guest-cycle cost. Anything that does not fit the current slice parks
  * the CPU in CPU_DMA sleep (same path as an immediate DMA), so update_gba keeps
@@ -1574,6 +1575,8 @@ cpu_loop_top:
         * block's. */
        m4a_irq_raises++;
 #endif
+       if (idle_loop_cond == IDLE_COND_GENERIC)
+          gba_idle_event(0xFFFFFFFFu, 0);   /* an event while halted */
        u32 ret = update_gba(cycles_remaining);
        if (completed_frame(ret))
           return;
@@ -3234,13 +3237,22 @@ m4a_resume:
         * for every instruction it ran, including the last one's. */
 #endif
 
+#ifdef GBA_ICOUNT
+       gba_icount++;   /* host and PROF builds only: instructions executed */
+#endif
        /* idle_loop_cond: ALWAYS is the classic semantic. WHEN_NE parks on a
         * poll's closing branch and burns the slice only while the compare says
         * it will loop — see cpu.h for the caller shape that demands this. The
         * extra test costs nothing: it is only evaluated on a pc match. */
-       if (reg[REG_PC] == idle_loop_target_pc && cycles_remaining > 0 &&
-           (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0))
-          cycles_remaining = 0;
+       if (reg[REG_PC] == idle_loop_target_pc) {
+          if (idle_loop_cond == IDLE_COND_GENERIC)
+             cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
+          else if (idle_loop_cond == IDLE_COND_CHEAT)
+             process_cheats();     /* about to execute the cheat hook */
+          else if (cycles_remaining > 0 &&
+                   (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0))
+             cycles_remaining = 0;
+       }
 
 #ifdef IDLE_SKIP_TRACE
        /* Host-only forensics: what does the parked loop actually observe, and
@@ -3278,6 +3290,8 @@ m4a_resume:
     } while(cycles_remaining > 0);
 
     collapse_flags();
+    if (idle_loop_cond == IDLE_COND_GENERIC)
+       gba_idle_event(reg[REG_PC], 0);      /* an event: arm a poll loop (gba_idle.c) */
     update_ret = update_gba(cycles_remaining);
     if (completed_frame(update_ret))
        return;
@@ -3763,10 +3777,19 @@ thumb_loop:
        /* End of Execute THUMB instruction */
        cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][0];
 
+#ifdef GBA_ICOUNT
+       gba_icount++;
+#endif
        /* Same conditional-skip semantic as the ARM side above. */
-       if (reg[REG_PC] == idle_loop_target_pc && cycles_remaining > 0 &&
-           (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0))
-          cycles_remaining = 0;
+       if (reg[REG_PC] == idle_loop_target_pc) {
+          if (idle_loop_cond == IDLE_COND_GENERIC)
+             cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
+          else if (idle_loop_cond == IDLE_COND_CHEAT)
+             process_cheats();     /* about to execute the cheat hook */
+          else if (cycles_remaining > 0 &&
+                   (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0))
+             cycles_remaining = 0;
+       }
 
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
           goto alert;
@@ -3774,6 +3797,8 @@ thumb_loop:
     } while(cycles_remaining > 0);
 
     collapse_flags();
+    if (idle_loop_cond == IDLE_COND_GENERIC)
+       gba_idle_event(reg[REG_PC], 1);
     update_ret = update_gba(cycles_remaining);
     if (completed_frame(update_ret))
        return;

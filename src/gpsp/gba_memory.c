@@ -468,9 +468,12 @@ void reload_timing_info()
   }
 }
 
+extern u32 gba_idle_sidefx;   /* src/porting/gba_idle.c */
+
 u8 read_backup(u32 address)
 {
   u8 value = 0;
+  gba_idle_sidefx++;     /* flash command state (gba_idle.c) */
 
   if(backup_type == BACKUP_EEPROM)
     return 0xff;
@@ -664,6 +667,7 @@ void function_cc write_eeprom(u32 unused_address, u32 value)
 u32 function_cc read_eeprom(void)
 {
   u32 value;
+  gba_idle_sidefx++;     /* the bit counter advances (gba_idle.c) */
 
   switch(eeprom_mode)
   {
@@ -1635,20 +1639,27 @@ u32 function_cc read_memory32(u32 address)
   return value;
 }
 
+/* Every store, and every read with a side effect, counts here: the generic
+ * idle skip (src/porting/gba_idle.c) only repeats a pass that made none. */
+extern u32 gba_idle_sidefx;
+
 cpu_alert_type function_cc write_memory8(u32 address, u8 value)
 {
+  gba_idle_sidefx++;
   write_memory(8);
   return CPU_ALERT_NONE;
 }
 
 cpu_alert_type function_cc write_memory16(u32 address, u16 value)
 {
+  gba_idle_sidefx++;
   write_memory(16);
   return CPU_ALERT_NONE;
 }
 
 cpu_alert_type function_cc write_memory32(u32 address, u32 value)
 {
+  gba_idle_sidefx++;
   write_memory(32);
   return CPU_ALERT_NONE;
 }

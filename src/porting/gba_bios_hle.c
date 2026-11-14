@@ -1130,6 +1130,8 @@ static int hle_bit_unpack(unsigned *regs, int *cycles)
 
 int gba_bios_hle(unsigned number, unsigned *regs, int *cycles)
 {
+    extern unsigned int gba_idle_sidefx;
+    gba_idle_sidefx++;     /* writes memory directly (src/porting/gba_idle.c) */
     *cycles = 0;
 
     switch (number & 0xFFu) {

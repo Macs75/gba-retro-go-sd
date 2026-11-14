@@ -250,6 +250,10 @@ int m4a_hle_execute(unsigned int *regs, int *cycles,
 
     if (!s_variant)
         return M4A_DECLINED;
+    {
+        extern unsigned int gba_idle_sidefx;
+        gba_idle_sidefx++;     /* the mixer writes memory directly (gba_idle.c) */
+    }
 
     for (i = 0; i < 16; i++)
         st.r[i] = regs[i];

@@ -174,6 +174,14 @@ extern u32 idle_loop_target_pc;
  * that takes six frames and one that takes seven hundred. */
 #define IDLE_COND_ALWAYS   0u
 #define IDLE_COND_WHEN_NE  1u
+/* No table entry for the game: idle_loop_target_pc is the head of a poll loop
+ * the generic skip armed (src/porting/gba_idle.c), and an arrival there goes
+ * to gba_idle_head(), which skips whole passes only when it proved them
+ * no-ops -- exactly. */
+#define IDLE_COND_GENERIC  2u
+/* Cheats with a master hook: the slot holds the hook instead (one compare per
+ * instruction for both), process_cheats() runs there, and no idle skip. */
+#define IDLE_COND_CHEAT    3u
 extern u32 idle_loop_cond;
 extern u32 translation_gate_targets;
 extern u32 translation_gate_target_pc[MAX_TRANSLATION_GATES];
