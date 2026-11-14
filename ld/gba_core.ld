@@ -75,6 +75,11 @@ SECTIONS
       build/cheats.o
       build/gba_idle_loop.o
       build/bilinear.o
+      build/gba_rec.o
+      build/gba_prof.o
+      build/gba_timing.o
+      build/gba_idle.o
+      build/gba_scale.o
     ) *(.text .text*)
 
     /* cpu.o / m4a_gpsp.o run from ITCM. Their *rodata* must stay in RAM
@@ -129,6 +134,14 @@ SECTIONS
     build/cpu.o (.text*)
     build/m4a_gpsp.o (.text*)
     build/video.o (.text.update_scanline)
+    *(.gba_itcm_text*)       /* the scaler (gba_scale.c), PROF's PC sampler (gba_prof.c) */
+    /* Hot code that ran from the QSPI flash (gba.xip), by the PC sampler
+     * (Kirby, 2026-11-14): the plain sprite renderer (the 16-bit, no-blend
+     * instance; the other four stay in flash), the tile-layer drivers, and
+     * the M4A HLE's guest-memory helpers, called per sample. */
+    build/video.o (.text._Z20render_scanline_objsItL8rendtype0EEvjjjPvPKt*)
+    build/video.o (.text._Z18tile_render_layers*)
+    build/m4a_hle.o (.text.rd_* .text.wr_* .text.win_hold)
     . = ALIGN(4);
     __CORE_ITCM_CODE_END__ = .;
   } >ITCM
@@ -157,6 +170,11 @@ SECTIONS
     build/cheats.o (.text .text*)
     build/gba_idle_loop.o (.text .text*)
     build/bilinear.o (.text .text*)
+    build/gba_rec.o (.text .text*)
+    build/gba_prof.o (.text .text*)
+    build/gba_timing.o (.text .text*)
+    build/gba_idle.o (.text .text*)
+    build/gba_scale.o (.text .text*)
   } >GBA_CODE
 
   .rodata_gba :

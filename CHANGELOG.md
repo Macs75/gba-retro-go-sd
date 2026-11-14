@@ -23,6 +23,92 @@ attached to the release:
 - `<binary>-<tag>.zip` — SD layout only (`cores/` + packed `.bin` and sidecar `.xip`)
 - `<binary>-<tag>-debug.zip` — ELF + linker map (use `arm-none-eabi-addr2line` for crash PC/LR → function/line)
 
+## [Unreleased]
+
+### Added
+
+- **Record and replay input** from the pause menu ("Record input" /
+  "Replay input"): the game restarts from power-on and the keys of every
+  frame are saved next to the ROM (`<game>.rec`, with the cart save as it
+  was at the start); a replay plays them back exactly, for reproducing a
+  problem or comparing performance. A replay uses the recording's cart
+  save, so the player's save file is not written for the rest of that
+  session. Every 120 frames both log `REC/hash` lines (RAM, video, CPU and
+  audio hashes): two runs of one recording must print the same lines.
+- **Generic poll-loop skip, for every game**: loops that only read and
+  compare (waiting on DISPSTAT, VCOUNT or a RAM flag an interrupt sets) are
+  found while the game runs, and their passes are skipped up to the next
+  hardware event once two passes prove they change nothing (no store,
+  identical registers and flags). Exact: host replays with and without it
+  log the same `REC/hash` lines in all 149 games of a 150-game set that run
+  on the host. Kirby & The Amazing Mirror: 12-17% fewer instructions in its
+  heaviest stage-2 scenes.
+
+- Host tools: `GBA_PCHIST=1` (PC histogram, `tools/gba_pchist.py`),
+  `tools/gba_idle_census.sh` (poll loops across a ROM set),
+  `tools/gba_idle_ab.sh` (the skip against none, over a ROM set).
+- `make PROF=1`: a profiling build that prints `PROF/` lines every 120 frames
+  (frame budget, the ARM7 / renderer / M4A mixer split, scaling, the LCD and
+  audio waits), and samples the device CPU's PC at 1 kHz while a replay
+  runs (the firmware's SysTick through a handler in ITCM): `<game>.pcs` next
+  to the ROM, one histogram per 1800 replay frames, read with
+  `tools/gba_pcs_report.py` and the build's ELF.
+- Host: `GBA_FAST=1`, `GBA_EXIT_FRAME=N`, `GBA_FRAMESKIP=N`, `GBA_RECORD=1` /
+  `GBA_REPLAY=1` (`GBA_REC_AT=N`), `GBA_HASH_EVERY=N`, `GBA_INPUT_RAW=<file>`.
+
+### Changed
+
+- **The GBA's real frame rate, 59.7275 Hz** (280,896 cycles of 16.78 MHz).
+  Every sample a frame produces (803.65 on average at 48 kHz) goes into the
+  firmware's interrupt-fed audio ring, and the loop paces on that ring, so
+  it runs at the audio's rate divided by the samples per frame: the GBA's.
+  The LCD refresh is set to the same rate (milli-Hz, read back from the
+  real audio clock; firmwares without milli-Hz rates keep 60 Hz), and the
+  firmware's frameskip gets the exact frame time.
+- Every frame that is on time, or late with at least 2 frames of audio
+  still queued, draws at a fixed point of the LCD's scan (after the last
+  swap has shown, between scan lines 32 and 200), so its swap never
+  straddles the vertical blank; a late frame with the audio low draws at
+  once, or drops its picture if the last swap has not shown yet.
+- **Smoother FULL / FIT scaling** (the "hard" filter): the arcade core's
+  scaler. Every 3 GBA pixels make 4 on the panel, (s0, s1, avg(s1,s2), s2),
+  and every panel row is a 2-tap blend of the two GBA rows around it, done
+  by DMA2D from a small ring of pre-scaled rows while the CPU scales the
+  next one. Scaling OFF and the "soft" filter are unchanged.
+- Faster interpreter: the ARM7's flags are written into the CPSR only where
+  something reads them (MSR, MRS, SWI, the M4A HLE, events, interrupts)
+  instead of before every instruction, and the cheat hook shares the idle
+  skip's one PC compare (with cheats on, the idle skip is off). Exact: the
+  same `REC/hash` lines as before in all 149 games that run on the host.
+- Hot code out of the flash: the plain sprite renderer, the tile-layer
+  drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
+  ITCM (the device PC sampler found them running from gba.xip); the serial
+  port is no longer polled at every event while no link device is
+  emulated.
+- `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
+  ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
+  `PROF/cpi` (device cycles per GBA instruction; the count itself costs the
+  interpreter 7-9%, so it is opt-in).
+
+- The per-game idle tables (gpSP's `gba_over.h`, `gba_idle_loop.c` and the
+  two hand-listed VCOUNT polls) are off: on 37 of the 47 games of the set
+  they covered, the generic skip removed 39-88% more instructions (and as
+  many on the other 10), exactly, where the tables' skip was not.
+  `make GBA_IDLE_TABLES=1` brings them back instead.
+
+### Fixed
+
+- Pacing: the loop locked onto the LCD (60 Hz set, ~59.64 Hz real) because
+  drawing slept until the last swap showed; it then never waited for the
+  audio, which slowly underran, and the frameskip's rounded frame time
+  (16.74 ms against 16.77 real) skipped 2 frames every ~10 s on frames with
+  10-16% to spare (Kirby & The Amazing Mirror).
+- Build: the -O2/-O3 objects (CPU, memory, renderer, sound, BIOS and M4A
+  HLE) got no dependency files, so a header change did not rebuild them,
+  and a stray `-DUSE_HAL_DRIVER` file appeared in the tree.
+- Host build: a missing `odroid_system_switch_app` and a `frame_counter`
+  clash with gpSP's own.
+
 ## [v0.0.1] - 2026-08-20
 
 ### Added

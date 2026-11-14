@@ -21,7 +21,9 @@
  * comment: include AFTER those so macro-substitution rewrites later *uses*,
  * not the extern declarations this file relies on for type checking). */
 #ifdef HOST_BUILD
+#include <stdlib.h>
 #include "host_compat.h"
+void gba_pchist_frame(void);   /* gba_pchist.c, GBA_PCHIST */
 #else
 #include "gw_core_bridge.h"
 #endif
@@ -46,6 +48,11 @@ extern uint32_t get_SystemCoreClock(void);
 #include "gba_savestate_abi.h"
 #include "gba_idle_loop.h"
 #include "gba_audio_filter.h"
+#include "gba_prof.h"
+#include "gba_rec.h"
+#include "gba_timing.h"
+#include "gba_idle.h"
+#include "gba_scale.h"
 
 extern uint32_t  idle_loop_target_pc; /* gpSP's; gba_frontend.c owns the storage */
 extern uint32_t  idle_loop_cond;      /* 0 = always burn; 1 = only while the branch loops */
@@ -92,6 +99,8 @@ uint32_t sound_fifo_rate_hz(void);
 /* gpsp's cheat engine: GameShark / CodeBreaker / Action Replay, 20 slots. */
 int  cheat_parse(unsigned index, const char *code);
 void cheat_clear(void);
+extern uint32_t cheat_master_hook;
+#define IDLE_COND_CHEAT 3u        /* cpu.h */
 #define GBA_MAX_CHEAT_SLOTS 20
 #endif
 
@@ -116,15 +125,10 @@ void cheat_clear(void);
  *
  * A GBA frame is 280,896 cycles of a 16.777216 MHz clock: 16.7427 ms, which is
  * 59.7275 fps, not 60. At 48 kHz that is 803.65 samples a frame, and gpSP produces
- * exactly that many. Asking for 800 left 3.65 of them behind every frame, and gpSP's
- * ring holds 2048 — so it filled and lapped itself about every nine seconds, after
- * which sound_read_samples() returned a nonsense count and the code below filled the
- * rest of the buffer with ZEROES. A waveform yanked to zero and back is a click. That
- * was the crackle, and it was never the speaker.
- *
- * 804 is a hair more than is produced, which is the safe side to err on: the ring
- * drains to its floor and stays there instead of lapping, and the shortfall is about
- * a third of a sample per frame — held, not zeroed, below. */
+ * exactly that many (803 or 804). Every one of them is read each frame
+ * (gba_pcm_submit, in chunks of this size): a reader that leaves some behind lets
+ * gpSP's 2048-pair ring fill and lap itself, after which sound_read_samples()
+ * returns a nonsense count -- a click every nine seconds once. */
 #define GBA_AUDIO_FRAMES         804
 static int16_t gba_audio_stereo[GBA_AUDIO_FRAMES * 2];
 
@@ -163,6 +167,15 @@ static void blit_emulator(void);
  * builds already. So measure both, and put the answer in the pause menu.
  *
  * Averaged over a second so a single heavy frame does not read as a trend. */
+/* The DWT cycle counter, read without clearing it: the PROF build's phase
+ * marks (gba_prof.c) measure from the same free-running counter, and
+ * clearing it mid-frame would corrupt them. Differences wrap correctly. */
+#ifdef HOST_BUILD
+static inline uint32_t gba_cyc(void) { return 0; }
+#else
+static inline uint32_t gba_cyc(void) { return *(volatile uint32_t *)0xE0001004u; }
+#endif
+
 typedef struct {
     uint32_t cycles;   /* accumulated since the last publish */
     uint32_t frames;
@@ -429,6 +442,14 @@ static void gba_load_bios(void)
  * top of it. */
 static void gba_SramSave(void)
 {
+#if defined(GBA_PROF) && !defined(HOST_BUILD)
+    gba_prof_quit();   /* the firmware's interrupt table back (the PC sampler) */
+#endif
+    gba_rec_close();   /* quit / sleep: the recording gets its frame count */
+    if (!gba_rec_backup_is_players()) {
+        printf("gba: cart save not written: a replay ran this session, the save in RAM is the recording's\n");
+        return;
+    }
     char *path = odroid_system_get_path(ODROID_PATH_SAVE_SRAM, ACTIVE_FILE->path);
     FILE *f = fopen(path, "wb");
     if (f != NULL) {
@@ -500,6 +521,7 @@ static bool gba_SaveState(const char *savePathName)
 
 static bool gba_LoadState(const char *savePathName)
 {
+    gba_rec_close();   /* a loaded state ends a record/replay */
     unsigned nreg = 0;
     const gba_bulk_region_t *rg = gba_bulk_regions(&nreg);
 
@@ -554,47 +576,166 @@ static void *gba_Screenshot(void)
 }
 
 /* ------------------------------------------------------------------ audio --- */
+/* The firmware's SAI ISR plays from this ring (pcm_attach), a DMA half of
+ * GBA_DMA_HALF samples at a time; the main loop pushes every sample each
+ * frame produced and paces on the ring's fill level (gba_audio_pace).
+ *
+ * So the loop runs at the rate the samples are played: the SAI's rate /
+ * 803.65, the GBA's own 59.7275 Hz (gba_timing.h). It used to fill one
+ * fixed 804-sample DMA half per frame (59.70 Hz), with the LCD at 60 Hz
+ * (really ~59.64) and blit() sleeping until the last swap showed: the loop
+ * then locked onto the slower LCD, never waited for the audio again, and
+ * the audio underran (Kirby, 2026-11-14).
+ *
+ * Short DMA halves: the wait ends at an ISR, so the halves' length is how
+ * far the moment the loop draws can wander in the LCD's scan (4.2 ms).
+ *
+ * GBA_PACE_SPARE frames queue beyond the one playing: a frame that overruns
+ * by up to that much plays from them, and lighter frames refill them. */
+#define GBA_DMA_HALF     201u            /* samples: 804 / 4 */
+#define GBA_RING         4096u
+#define GBA_PACE_SPARE   2u
+#define GBA_SPF_MAX      GBA_AUDIO_FRAMES
+_Static_assert((GBA_RING & (GBA_RING - 1u)) == 0u, "the pcm ring must be a power of two");
+static int16_t *gba_ring;                /* GBA_RING samples, AHB heap */
+static volatile uint16_t gba_ring_head, gba_ring_tail;
+/* 0 while the sound loop is muted (volume 0, start paused): the ISR then
+ * plays zeros and leaves the ring alone, so nothing may wait for it to
+ * drain (the SNES core's volume-0 hang, 2026-10-28): the loop paces on the
+ * DMA's ticks instead */
+static uint8_t gba_ring_live = 1;
+
+static uint16_t gba_ring_queued(void)
+{
+    return (uint16_t)((gba_ring_head - gba_ring_tail) & (GBA_RING - 1u));
+}
+
+#if defined(GBA_PROF) && !defined(HOST_BUILD)
+uint32_t gba_audio_queued(void) { return gba_ring_queued(); }   /* PROF/pace */
+#endif
+
+/* Empty the ring from the main loop. The ISR only ever advances the tail,
+ * up to the head, so set head = tail and retry if it moved in between. */
+static void gba_ring_drop(void)
+{
+    uint16_t t;
+    do {
+        t = gba_ring_tail;
+        gba_ring_head = t;
+    } while (gba_ring_tail != t);
+}
+
+static void gba_ring_push(const int16_t *src, uint32_t n)
+{
+    const uint16_t mask = (uint16_t)(GBA_RING - 1u);
+    uint16_t head = gba_ring_head;
+    uint32_t used = gba_ring_queued();
+    uint32_t max = GBA_SPF_MAX * (GBA_PACE_SPARE + 2u);   /* only a resume or a speed-up gets here */
+    uint32_t take = used >= max ? 0 : (max - used < n ? max - used : n);
+    for (uint32_t i = 0; i < take; i++) {
+        gba_ring[head] = src[i];
+        head = (uint16_t)((head + 1u) & mask);
+    }
+    gba_ring_head = head;
+}
+
+/* (Re)start the audio DMA with the ring attached, at scan line
+ * GBA_SYNC_LINE, where the frames draw (gba_lcd_window_wait): the audio wait
+ * of a frame on time then already ends near it. The first waits let a
+ * re-programmed PLL3 (gba_timing_apply) settle. */
+#define GBA_SYNC_LINE 32u
+static void gba_audio_start(void)
+{
+    audio_stop_playing();
+    odroid_audio_init(GBA_SAMPLE_RATE);
+    audio_clear_buffers();
+    gba_ring_head = gba_ring_tail = 0;
+    lcd_wait_for_vblank();
+    lcd_wait_for_vblank();               /* the line 239 interrupt */
+#ifndef HOST_BUILD
+    for (uint32_t guard = 0; guard < 2000000u; guard++) {   /* to GBA_SYNC_LINE */
+        uint32_t y = lcd_get_pixel_position() & 0xffffu;    /* LTDC CPSR.CYPOS */
+        if (y >= GBA_SYNC_LINE && y < 239u)
+            break;
+    }
+#endif
+    /* start_playing clears the ring's ownership: attach and enable after */
+    audio_start_playing(GBA_DMA_HALF);
+    pcm_attach(gba_ring, (int)GBA_RING, &gba_ring_head, &gba_ring_tail);
+    pcm_audio_set((int)common_emu_sound_get_volume(), !common_emu_sound_loop_is_muted());
+    pcm_audio_enable(1);
+}
+
+/* Everything the frame produced into the ring: gpSP's mixer runs at 48 kHz
+ * and leaves 803 or 804 stereo pairs a frame (its own carry), read until
+ * it has no more. Folded to mono (one speaker), through the console's
+ * analog rolloff (gba_audio_filter.h); the ISR applies the volume. */
 static void gba_pcm_submit(void)
 {
-    uint32_t got = sound_read_samples(gba_audio_stereo, GBA_AUDIO_FRAMES);
+    int vol = (int)common_emu_sound_get_volume();
+    int play = !common_emu_sound_loop_is_muted();
+    pcm_audio_set(vol, play);
+    if (!play && gba_ring_live)
+        gba_ring_drop();        /* left queued, it would play stale at the unmute */
+    gba_ring_live = (uint8_t)play;
 
-    if (common_emu_sound_loop_is_muted())
-        return;
-
-    int32_t   factor = common_emu_sound_get_volume();
-    int16_t  *out    = audio_get_active_buffer();
-    uint16_t  len    = audio_get_buffer_length();
-
-    if (len > GBA_AUDIO_FRAMES)
-        len = GBA_AUDIO_FRAMES;
-
-    /* Hold the last sample when the core comes up short; do not slam to zero.
-     *
-     * A shortfall is normal here — we ask for a hair more than a frame produces, on
-     * purpose (see GBA_AUDIO_FRAMES) — so this runs a fraction of a sample per frame.
-     * Repeating a sample for 20 microseconds is inaudible. Dropping the waveform to
-     * zero and back is a click, and doing it every frame is a crackle. */
-    static int16_t last_mono = 0;
-
-    for (uint16_t i = 0; i < len; i++) {
-        /* One speaker: fold the pair rather than throw a channel away. Anything
-         * panned hard to the side would otherwise vanish. */
-        if (i < got) {
-            last_mono = (int16_t)(((int32_t)gba_audio_stereo[i * 2] +
-                                   gba_audio_stereo[i * 2 + 1]) / 2);
-        }
-        out[i] = last_mono;
-    }
-
-    /* The analog rolloff the real console has and our clean DAC does not —
-     * cutoff follows the rate this cart is clocking its FIFOs at, so the
-     * resampling images go and the music stays. See gba_audio_filter.h. */
     gba_lpf_configure(sound_fifo_rate_hz());
-    gba_lpf_apply(out, len);
+    for (int chunk = 0; chunk < 4; chunk++) {
+        uint32_t got = sound_read_samples(gba_audio_stereo, GBA_AUDIO_FRAMES);
+        gba_rec_audio(gba_audio_stereo, (int)got);   /* the machine's output */
+        if (got == 0)
+            break;
+        /* One speaker: fold the pair rather than throw a channel away. Anything
+         * panned hard to the side would otherwise vanish. In place: sample i
+         * only reads pairs >= i. */
+        for (uint32_t i = 0; i < got; i++)
+            gba_audio_stereo[i] = (int16_t)(((int32_t)gba_audio_stereo[i * 2] +
+                                             gba_audio_stereo[i * 2 + 1]) / 2);
+        gba_lpf_apply(gba_audio_stereo, (uint16_t)got);
+        if (play)
+            gba_ring_push(gba_audio_stereo, got);
+        if (got < GBA_AUDIO_FRAMES)
+            break;
+    }
+}
 
-    for (uint16_t i = 0; i < len; i++)
-        out[i] = (int16_t)(((int32_t)out[i] * factor) >> 8);
+/* The frame wait: while the ring holds the playing frame plus
+ * GBA_PACE_SPARE more. A frame late by any fraction of a frame shows up
+ * there, so every overrun is repaid by not waiting. Muted, nothing drains
+ * the ring: wait one frame's worth of DMA ticks. A speed-up does not wait.
+ * Returns 1 if it waited. */
+static int gba_audio_pace(void)
+{
+    static uint32_t slot;
+    const uint32_t ticks = (GBA_AUDIO_FRAMES + GBA_DMA_HALF / 2u) / GBA_DMA_HALF;
+    const uint16_t target = (uint16_t)(GBA_AUDIO_FRAMES * (GBA_PACE_SPARE + 1u));
+    int waited = 0;
 
+    if (odroid_system_get_app()->speedupEnabled != SPEEDUP_1x) {
+        slot = dma_counter;
+        return 0;
+    }
+    if (gba_ring_live) {
+        /* bounded (~100 ms of interrupts): a stopped DMA must not hang the
+         * loop into a watchdog reset with no log (the SNES core's lesson) */
+        for (uint32_t guard = 0; guard < 100000u && gba_ring_queued() >= target; guard++) {
+            waited = 1;
+            wdog_refresh();
+            cpumon_sleep();      /* until the next interrupt: an ISR drains the ring */
+        }
+        slot = dma_counter;
+        return waited;
+    }
+    if ((int32_t)(dma_counter - slot) > (int32_t)(ticks * GBA_PACE_SPARE) ||
+        (int32_t)(slot - dma_counter) > (int32_t)ticks)
+        slot = dma_counter;      /* a pause, or just muted: start afresh */
+    slot += ticks;
+    for (uint32_t guard = 0; guard < 100000u && (int32_t)(dma_counter - slot) < 0; guard++) {
+        waited = 1;
+        wdog_refresh();
+        cpumon_sleep();
+    }
+    return waited;
 }
 
 /* ------------------------------------------------------------------ video --- */
@@ -685,16 +826,31 @@ static void screen_blit_bilinear(int32_t dest_width)
                      NULL, -1, 255, NULL, NULL, IMAGE_HINT_BILINEAR, NULL, NULL);
 }
 
+/* 320 columns, FIT/FULL/CUSTOM with the hard filter: the arcade core's 3:4
+ * lane + DMA2D row blend (gba_scale.c), the letterbox rows cleared here;
+ * the nearest-neighbour scaler when the scaler's ring did not fit. */
+static int gba_scale_ok;
+static void screen_blit_320(int32_t dest_height)
+{
+    if (!gba_scale_ok) {
+        screen_blit_nn(LCD_WIDTH, dest_height);
+        return;
+    }
+    uint16_t *dest = lcd_get_active_buffer();
+    int wpad = (LCD_HEIGHT - dest_height) / 2;
+    if (wpad > 0) {
+        memset(dest, 0, (size_t)wpad * LCD_WIDTH * sizeof(uint16_t));
+        memset(dest + (wpad + dest_height) * LCD_WIDTH, 0,
+               (size_t)(LCD_HEIGHT - wpad - dest_height) * LCD_WIDTH * sizeof(uint16_t));
+    }
+    gba_scale_320((const uint16_t *)video_frame.buffer, dest + wpad * LCD_WIDTH, dest_height);
+}
+
 static void blit_emulator(void)
 {
-    /* NOT lcd_sleep_while_swap_pending() — that is a wait, and a wait timed together
-     * with work reads as work. It moves to blit(), where it is timed on its own.
-     *
-     * This is the second time the same trap has cost a build. "Draw 9.1 ms" on the
-     * title screen was this wait; on a screen where the CPU had slack, the slack
-     * showed up there and read as an expensive renderer. Then Scale jumped from
-     * 1.99 ms to 4.47 ms between two scenes — for a fixed-size blit that cannot
-     * depend on the scene at all. Same wait, same lie. */
+    /* No wait for the LCD in here: a wait timed together with work reads as work
+     * (it once made a fixed-size blit look like it cost 2 to 4.5 ms by scene). The
+     * main loop drops a picture whose swap is still pending instead. */
     odroid_display_scaling_t scaling = odroid_display_get_scaling_mode();
     odroid_display_filter_t filtering = odroid_display_get_filter_mode();
 
@@ -724,7 +880,7 @@ static void blit_emulator(void)
             lcd_clear_active_buffer();           /* bilinear does not fill the borders */
             screen_blit_bilinear(LCD_WIDTH);
         } else {
-            screen_blit_nn(LCD_WIDTH, 213);
+            screen_blit_320(213);
         }
         break;
     case ODROID_DISPLAY_SCALING_FULL:
@@ -732,35 +888,21 @@ static void blit_emulator(void)
         if (filtering == ODROID_DISPLAY_FILTER_SOFT)
             screen_blit_bilinear(LCD_WIDTH);
         else
-            screen_blit_nn(LCD_WIDTH, LCD_HEIGHT);
+            screen_blit_320(LCD_HEIGHT);
         break;
     default:
-        screen_blit_nn(LCD_WIDTH, 213);
+        screen_blit_320(213);
         break;
     }
 }
 
-/* Draw is 9.1 ms of a 16.67 ms frame and halving the pixel stores changed it by
- * 0.02 ms — which says the stores were never the cost, and that the code I changed
- * may not even be the code that runs. blit() is three different things depending on
- * two settings, so stop guessing and split it: the scaler, the overlay, and which
- * path was taken. */
+/* The pause menu's repaint: the picture the game left, under the menu. The
+ * main loop presents its frames itself (app_main_gba), timed part by part. */
 static void blit(void)
 {
-    /* The wait for the LCD's previous swap to finish. Idle time, not work — and the
-     * one number here that going FASTER makes bigger, because the slack has to land
-     * somewhere. Timed on its own so it stops being mistaken for the renderer. */
-    common_emu_clear_dwt_cycles();
     lcd_sleep_while_swap_pending();
-    gba_diag_add(&diag_wait, common_emu_get_dwt_cycles());
-
-    common_emu_clear_dwt_cycles();
     blit_emulator();
-    gba_diag_add(&diag_scale, common_emu_get_dwt_cycles());
-
-    common_emu_clear_dwt_cycles();
     common_ingame_overlay();
-    gba_diag_add(&diag_overlay, common_emu_get_dwt_cycles());
 }
 
 /* ------------------------------------------------------------------ input --- */
@@ -792,7 +934,8 @@ static void gba_input_read(odroid_gamepad_state_t *joystick)
     if (joystick->values[ODROID_INPUT_X])      keys |= GBA_KEY_R;
     if (joystick->values[ODROID_INPUT_Y])      keys |= GBA_KEY_L;
 
-    gba_set_keys(keys);
+    /* recorded, or replaced by the replay (gba_rec.c) */
+    gba_set_keys(gba_rec_input((uint16_t)keys));
 }
 
 /* gw_sleep() restores the *settings* OC level on wake, but GBA always forces
@@ -802,27 +945,132 @@ static void gba_input_read(odroid_gamepad_state_t *joystick)
 static void gba_sleep_wake_up(void)
 {
     SystemClock_Config(3);
-    odroid_audio_init(odroid_audio_sample_rate_get());
-    audio_start_playing(GBA_AUDIO_FRAMES);
+    gba_timing_apply();     /* the resume may have reset the LCD rate */
+    gba_audio_start();      /* and restarts the DMA: realign the phase */
+}
+
+/* ------------------------------------------------------- record / replay --- */
+static const uint8_t *gba_rom;
+static uint32_t gba_rom_size;
+
+/* Only the codes the user ticked on for this ROM go in. After a reset: parsing
+ * a code installs the hook the engine watches for, and a reset throws it away. */
+static void gba_apply_cheats(void)
+{
+#if CHEAT_CODES == 1
+    cheat_clear();
+    unsigned slot = 0;
+    for (int i = 0; i < ACTIVE_FILE->cheat_count && slot < GBA_MAX_CHEAT_SLOTS; i++) {
+        if (odroid_settings_ActiveGameGenieCodes_is_enabled(ACTIVE_FILE->path, i))
+            cheat_parse(slot++, ACTIVE_FILE->cheat_codes[i]);
+    }
+    /* A master hook takes the interpreter's one special-PC slot (cpu.cc,
+     * IDLE_COND_CHEAT): the cheats run there, and the idle skip is off. */
+    if (cheat_master_hook != 0xFFFFFFFFu) {
+        idle_loop_target_pc = cheat_master_hook;
+        idle_loop_cond = IDLE_COND_CHEAT;
+        printf("gba: cheat hook at 0x%08lX (no idle skip while cheats are on)\n",
+               (unsigned long)cheat_master_hook);
+    }
+#endif
+}
+
+/* what a recording is tied to besides its inputs (gba_rec.c): the cart, and
+ * the BIOS and cheats it ran with */
+static uint32_t gba_rom_hash(void)
+{
+    uint32_t n = gba_rom_size < 0x10000u ? gba_rom_size : 0x10000u;
+    return gba_rec_fnv(gba_rom, n, GBA_REC_FNV0);
+}
+
+static uint32_t gba_setup_hash(void)
+{
+    uint32_t h = gba_rec_fnv(bios_rom, GBA_BIOS_ROM_SIZE, GBA_REC_FNV0);
+#if CHEAT_CODES == 1
+    for (int i = 0; i < ACTIVE_FILE->cheat_count; i++) {
+        if (odroid_settings_ActiveGameGenieCodes_is_enabled(ACTIVE_FILE->path, i))
+            h = gba_rec_fnv(ACTIVE_FILE->cheat_codes[i], (uint32_t)strlen(ACTIVE_FILE->cheat_codes[i]), h);
+    }
+#endif
+    return h;
+}
+
+/* the record/replay's power-on: the machine as the start-up reset leaves it
+ * (gpSP's reset, then the cheats, the output filter); the cart save and the
+ * RTC base are the caller's (gba_rec.c) */
+static void gba_power_on(void)
+{
+    reset_gba();
+    gba_idle_reset();
+    gba_apply_cheats();
+    gba_lpf_reset();
+}
+
+static void gba_rec_toggle(int mode)
+{
+    if (gba_rec_mode() == mode)
+        gba_rec_close();
+    else
+        gba_rec_start(mode, ACTIVE_FILE->path, gba_rom_hash(), gba_setup_hash(), gba_power_on);
+}
+
+/* Actions, not toggles: the label says what selecting the entry does. */
+static bool rec_record_cb(odroid_dialog_choice_t *option, odroid_dialog_event_t event,
+                          uint32_t repeat)
+{
+    (void)option; (void)repeat;
+    if (event == ODROID_DIALOG_ENTER)
+        gba_rec_toggle(GBA_REC_RECORD);
+    return event == ODROID_DIALOG_ENTER;
+}
+
+static bool rec_replay_cb(odroid_dialog_choice_t *option, odroid_dialog_event_t event,
+                          uint32_t repeat)
+{
+    (void)option; (void)repeat;
+    if (event == ODROID_DIALOG_ENTER)
+        gba_rec_toggle(GBA_REC_REPLAY);
+    return event == ODROID_DIALOG_ENTER;
+}
+
+/* PHASE: where in the LCD's scan a frame draws and swaps. A swap only shows
+ * at the start of vertical blanking (scan line 248 of 256). If the draw
+ * straddled that line, every swap would miss it, still be pending at the
+ * next frame's check, and every other picture would be dropped (30 fps --
+ * the Neo Geo core's bug).
+ *
+ * The audio wait alone does not hold the phase still: it ends at one of the
+ * four DMA interrupts of a frame (GBA_DMA_HALF), and after a run of late
+ * frames the loop can settle on any of the four, 4.2 ms apart -- one of
+ * them across the blanking (Kirby, 2026-11-14: 40-57 of 120 pictures dropped
+ * until a watchdog restarted the audio). So a frame that was on time also
+ * waits until the last swap has shown and the scan is between GBA_SYNC_LINE
+ * and GBA_DRAW_LAST, then draws: the draw is pinned to the LCD every frame.
+ * The LCD runs at the loop's rate (gba_timing.c), so this wait settles to a
+ * constant and the audio ring absorbs it. A late frame does not wait (it
+ * draws if the last swap has shown, else drops its picture). Bounded: a
+ * stopped LCD must not hang the loop. */
+#define GBA_DRAW_LAST 200u   /* scan line: the draw (~15 lines) swaps well before 248 */
+static void gba_lcd_window_wait(void)
+{
+#ifndef HOST_BUILD
+    uint32_t t0 = HAL_GetTick();
+    while (HAL_GetTick() - t0 < 40u) {
+        if (!lcd_is_swap_pending()) {
+            uint32_t y = lcd_get_pixel_position() & 0xffffu;   /* LTDC CPSR.CYPOS */
+            if (y >= GBA_SYNC_LINE && y < GBA_DRAW_LAST)
+                return;
+        }
+        wdog_refresh();
+        cpumon_sleep();          /* until the next interrupt: SysTick, the audio DMA */
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------- main --- */
 void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 {
     odroid_gamepad_state_t joystick;
-    /* Read-only (enabled = -1): the frame budget is 16.67ms, and these two say who
-     * is spending it. If Emulate dominates, the answer is clock and the interpreter.
-     * If Draw does, the answer is the renderer and where its code lives. */
-    odroid_dialog_choice_t options[] = {
-        {0, "Emu+ppu",  diag_emu_draw_str, -1, NULL},
-        {0, "Emu only", diag_emu_skip_str, -1, NULL},
-        {0, " = PPU",   diag_ppu_str,      -1, NULL},
-        {0, "Scale",    diag_scale_str,    -1, NULL},
-        {0, "Ovl",      diag_overlay_str,  -1, NULL},
-        {0, "LCD wait",  diag_wait_str,   -1, NULL},
-        {0, "Path",     diag_path_str,     -1, NULL},
-        ODROID_DIALOG_CHOICE_LAST
-    };
 
     if (start_paused) {
         common_emu_state.pause_after_frames = 2;
@@ -875,9 +1123,21 @@ void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
         gba_fatal("Out of AHB SRAM", "The cheat table could not be allocated");
 #endif
 
+    /* The scaler's row ring (gba_scale.c): 3.2 KB of AHB, DMA2D reads it. */
+    gba_scale_ok = gba_scale_init();
+#ifdef HOST_BUILD
+    if (getenv("GBA_NN"))
+        gba_scale_ok = 0;              /* host: the nearest-neighbour scaler, for comparisons */
+#endif
+
+    /* The ISR's sample ring (gba_audio_start): 8 KB, cold enough for AHB. */
+    gba_ring = (int16_t *)ahb_calloc(GBA_RING, sizeof(int16_t));
+    if (gba_ring == NULL)
+        gba_fatal("Out of AHB SRAM", "The 8KB audio ring could not be allocated");
+
     /* Level 3 (~353 MHz): same as the in-tree firmware GBA core. */
     SystemClock_Config(3);
-    audio_start_playing(GBA_AUDIO_FRAMES);
+    audio_start_playing(GBA_DMA_HALF);
     gba_lpf_reset();
 
     init_main();
@@ -897,6 +1157,8 @@ void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
     if (rom == NULL || rom_size == 0)
         gba_fatal("Could not cache the ROM in flash", "The cart may be larger than the free flash");
     gba_set_xip_rom(rom, rom_size);
+    gba_rom = rom;
+    gba_rom_size = rom_size;
     init_gamepak_buffer();
 
     /* force_rtc, force_rumble, force_serial — and only the first one changes.
@@ -922,6 +1184,14 @@ void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
                      SERIAL_MODE_DISABLED) != 0)   /* serial: no link port */
         gba_fatal("Not a Game Boy Advance ROM", "The header did not check out");
 
+    /* The idle skip: the generic one (gba_idle.c) for every game. It finds the
+     * loops a game waits in while it runs and skips their passes exactly, up to
+     * the next hardware event; on 47 games of a 150-game set that the per-game
+     * tables cover, it removed 39-88% more instructions than their entries in
+     * 37 and never fewer, and the tables' slice burn is not exact. It replaces
+     * gpSP's gba_over.h entry (set by load_gamepak) and the two tables below,
+     * which GBA_IDLE_TABLES=1 (make) brings back instead. */
+#ifdef GBA_IDLE_TABLES
     /* After load_gamepak, on purpose: it is what sets idle_loop_target_pc from
      * gpSP's own gba_over.h, and ours has to win. A game with no busy-wait PC
      * spins through the whole 280,896-cycle frame instead of doing ~75,000 cycles
@@ -962,20 +1232,14 @@ void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
         }
     }
 
+#else
+    gba_idle_enable();
+#endif
+
     gba_SramLoad();
     reset_gba();
 
-#if CHEAT_CODES == 1
-    /* After reset: parsing a code installs the hook the engine watches for, and a
-     * reset would throw it away again. Only the codes the user actually ticked on
-     * for this ROM go in. */
-    cheat_clear();
-    unsigned slot = 0;
-    for (int i = 0; i < ACTIVE_FILE->cheat_count && slot < GBA_MAX_CHEAT_SLOTS; i++) {
-        if (odroid_settings_ActiveGameGenieCodes_is_enabled(ACTIVE_FILE->path, i))
-            cheat_parse(slot++, ACTIVE_FILE->cheat_codes[i]);
-    }
-#endif
+    gba_apply_cheats();   /* after the reset, which would throw the hooks away */
 
     if (load_state) {
         odroid_system_emu_load_state(save_slot);
@@ -984,39 +1248,134 @@ void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
     }
 
     common_emu_enable_dwt_cycles();
+    /* the real frame rate, the LCD at it, then the audio DMA at a fixed point
+     * of the LCD's scan (gba_audio_start) -- last, after every slow load */
+    gba_timing_apply();
+    gba_audio_start();
+#if defined(GBA_PROF) && !defined(HOST_BUILD)
+    gba_prof_set_xip(g_xip_addr, g_xip_size);   /* the PC sampler maps gba.xip's code */
+#endif
+    GBA_PROF_INIT(GBA_AUDIO_FRAMES, GBA_SAMPLE_RATE);
+#ifdef HOST_BUILD
+    /* GBA_RECORD=1 / GBA_REPLAY=1: from power-on at start-up, or at loop
+     * frame GBA_REC_AT (a replay started mid-session must log the same
+     * REC/hash lines); the recording is closed at exit */
+    uint32_t host_loop_frame = 0, host_rec_at = 0;
+    int host_rec_mode = getenv("GBA_RECORD") ? GBA_REC_RECORD :
+                        getenv("GBA_REPLAY") ? GBA_REC_REPLAY : GBA_REC_OFF;
+    if (getenv("GBA_REC_AT"))
+        host_rec_at = (uint32_t)atoi(getenv("GBA_REC_AT"));
+    atexit(gba_rec_close);
+#endif
 
     while (true) {
         wdog_refresh();
 
+        gba_timing_frame_tick();
         bool drawFrame = common_emu_frame_loop();
         skip_next_frame = drawFrame ? 0 : 1;
 
+#if defined(GBA_AUTOREPLAY) && !defined(HOST_BUILD)
+        {   /* make AUTOREPLAY=1 (tests, gwemu): replay "<rom>.rec" from the
+             * first frame, no pause menu needed */
+            static int auto_done;
+            if (!auto_done) {
+                auto_done = 1;
+                gba_rec_toggle(GBA_REC_REPLAY);
+            }
+        }
+#endif
+#ifdef HOST_BUILD
+        if (host_rec_mode != GBA_REC_OFF && host_loop_frame == host_rec_at) {
+            gba_rec_start(host_rec_mode, ACTIVE_FILE->path, gba_rom_hash(), gba_setup_hash(),
+                          gba_power_on);
+            host_rec_mode = GBA_REC_OFF;
+        }
+        host_loop_frame++;
+#endif
         odroid_input_read_gamepad(&joystick);
-        common_emu_input_loop(&joystick, options, &blit);
+        {
+            /* Read-only (enabled = -1): who spends the frame. If Emulate dominates,
+             * the answer is clock and the interpreter; if Draw does, the renderer
+             * and where its code lives. Then record / replay (gba_rec.c). */
+            int rm = gba_rec_mode();
+            odroid_dialog_choice_t options[] = {
+                {0, "Emu+ppu",  diag_emu_draw_str, -1, NULL},
+                {0, "Emu only", diag_emu_skip_str, -1, NULL},
+                {0, " = PPU",   diag_ppu_str,      -1, NULL},
+                {0, "Scale",    diag_scale_str,    -1, NULL},
+                {0, "Ovl",      diag_overlay_str,  -1, NULL},
+                {0, "Wait",     diag_wait_str,     -1, NULL},
+                {0, "Path",     diag_path_str,     -1, NULL},
+                {104, rm == GBA_REC_RECORD ? "Stop recording" : "Record input", NULL, 1, &rec_record_cb},
+                {105, rm == GBA_REC_REPLAY ? "Stop replay" : "Replay input", NULL, 1, &rec_replay_cb},
+                ODROID_DIALOG_CHOICE_LAST
+            };
+            common_emu_input_loop(&joystick, options, &blit);
+        }
         common_emu_input_loop_handle_turbo(&joystick);
 
         gba_input_read(&joystick);
+        GBA_PROF_MARK(GBA_PH_FRAMECTL);
 
         /* execute_arm() returns when the frame driver says the frame is done — and it
-         * has drawn the picture along the way, unless skip_next_frame said not to. */
-        common_emu_clear_dwt_cycles();
+         * has drawn the picture into gba_framebuffer along the way, unless
+         * skip_next_frame said not to. */
+        uint32_t t = gba_cyc();
         execute_arm(execute_cycles);
-        gba_diag_add(drawFrame ? &diag_emu_draw : &diag_emu_skip,
-                     common_emu_get_dwt_cycles());
+        gba_diag_add(drawFrame ? &diag_emu_draw : &diag_emu_skip, gba_cyc() - t);
+        GBA_PROF_MARK(GBA_PH_EMU);
 
-        if (drawFrame) {
-            /* No outer timer around blit(): blit() clears the DWT counter itself, and
-             * an outer read would then only see whatever came after the last inner
-             * clear. That is what made "Draw" report 0.22 ms — exactly the overlay's
-             * number — while Scale alone was 1.99 ms. A measurement that quietly
-             * measures something else is worse than none. */
-            blit();
+        /* Emulate, then audio, then wait, then present: the wait ends at a
+         * fixed point of the LCD's scan (gba_audio_start), so the swap does. */
+        gba_pcm_submit();
+        gba_rec_frame_done();
+#ifdef GBA_PCHIST
+        gba_pchist_frame();
+#endif
+        GBA_PROF_MARK(GBA_PH_AUDIO);
+
+        t = gba_cyc();
+        int waited = gba_audio_pace();
+        /* Draw at a fixed point of the scan: a frame on time always, a late
+         * one too while the audio ring still holds 2 frames to spare -- it
+         * then shows one LCD refresh later instead of being dropped because
+         * it landed in the same refresh as the last picture (Kirby: 292
+         * pictures dropped while the ring sat at ~2.6 frames). Below that,
+         * a late frame does not wait: it draws if the last swap has shown,
+         * else drops its picture, and the emulation catches up. */
+        if (drawFrame && (waited ||
+                          (gba_ring_live && gba_ring_queued() >= 2u * GBA_AUDIO_FRAMES &&
+                           odroid_system_get_app()->speedupEnabled == SPEEDUP_1x)))
+            gba_lcd_window_wait();
+        gba_diag_add(&diag_wait, gba_cyc() - t);
+        GBA_PROF_MARK(GBA_PH_WAIT);
+
+        int drawn = drawFrame, vskip = 0;
+#ifndef HOST_BUILD
+        /* Never draw while the LCD still shows the back buffer: the last
+         * lcd_swap() takes effect at the LCD's next vertical blank. A frame on
+         * time, or late with audio to spare, has waited for it
+         * (gba_lcd_window_wait); one that finds it still pending DROPS its
+         * picture rather than wait, so it does not fall further behind the
+         * audio. */
+        if (drawn && lcd_is_swap_pending()) {
+            drawn = 0;
+            vskip = 1;
+        }
+#endif
+        if (drawn) {
+            t = gba_cyc();
+            blit_emulator();
+            gba_diag_add(&diag_scale, gba_cyc() - t);
+            GBA_PROF_MARK(GBA_PH_SCALE);
+            t = gba_cyc();
+            common_ingame_overlay();
+            gba_diag_add(&diag_overlay, gba_cyc() - t);
             lcd_swap();
+            GBA_PROF_MARK(GBA_PH_PRESENT);
         }
         gba_diag_publish();
-
-        gba_pcm_submit();
-
-        common_emu_sound_sync(false);
+        GBA_PROF_FRAME_END(drawn, !drawFrame, vskip, waited);
     }
 }

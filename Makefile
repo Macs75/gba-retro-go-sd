@@ -29,6 +29,12 @@ src/gpsp/rfu.c \
 src/porting/gba_frontend.c \
 src/porting/gba_idle_loop.c \
 src/porting/gba_audio_filter.c \
+src/porting/gba_rec.c \
+src/porting/gba_prof.c \
+src/porting/gba_timing.c \
+src/porting/gba_pchist.c \
+src/porting/gba_idle.c \
+src/porting/gba_scale.c \
 src/main_gba.c \
 src/porting/gba_bios_hle.c \
 src/m4a/m4a_hle.c \
@@ -89,6 +95,44 @@ CORE_ASFLAGS := -Isrc/gpsp/bios
 
 else
 $(error PROJECT_KIND must be 'core' (got '$(PROJECT_KIND)'))
+endif
+
+# PROF=1: the device profiler (src/porting/gba_prof.c): PROF/ lines every
+# 120 frames in the log. The objects do not depend on the defines and
+# BUILD_DIR must stay build (the linker script's paths), so a switch of
+# PROF needs a clean build first: the stamp below stops the build if it was
+# built the other way.
+# GBA_IDLE_TABLES=1: the per-game idle tables (gpSP's gba_over.h,
+# src/porting/gba_idle_loop.c) instead of the generic skip (gba_idle.c).
+ifeq ($(GBA_IDLE_TABLES),1)
+CORE_C_DEFS += -DGBA_IDLE_TABLES
+endif
+
+# AUTOREPLAY=1: replay "<rom>.rec" from the first frame (tests on gwemu).
+ifeq ($(AUTOREPLAY),1)
+CORE_C_DEFS += -DGBA_AUTOREPLAY
+endif
+
+# CPI=1 (with PROF=1): also count the interpreted instructions (PROF/cpi).
+# Not by default: the count changes the interpreter's codegen and cost
+# (+7-9% in Kirby), so PROF=1 alone measures the interpreter as shipped.
+PROF ?= 0
+CPI ?= 0
+ifeq ($(PROF),1)
+CORE_C_DEFS += -DGBA_PROF
+ifeq ($(CPI),1)
+CORE_C_DEFS += -DGBA_ICOUNT
+endif
+endif
+GBA_PROF_STAMP := $(BUILD_DIR)/.gba_prof
+ifeq ($(filter clean host host_clean docker docker_pull docker_shell,$(MAKECMDGOALS)),)
+GBA_PROF_PREV := $(shell cat $(GBA_PROF_STAMP) 2>/dev/null)
+ifneq ($(GBA_PROF_PREV),)
+ifneq ($(GBA_PROF_PREV),$(PROF)$(CPI))
+$(error $(BUILD_DIR) was built with PROF/CPI=$(GBA_PROF_PREV): make clean first)
+endif
+endif
+$(shell mkdir -p $(BUILD_DIR) && echo $(PROF)$(CPI) > $(GBA_PROF_STAMP))
 endif
 
 include $(GNW_CORE_SDK)/Makefile
@@ -198,7 +242,7 @@ DOCKER_RUN := docker run --rm $(DOCKER_TTY_FLAG) \
 
 docker:
 	$(V)$(ECHO) "[ DOCKER ]" $(DOCKER_IMAGE) "PROJECT_KIND=$(PROJECT_KIND)"
-	$(V)$(DOCKER_RUN) make --no-print-directory -j$$(nproc) PROJECT_KIND=$(PROJECT_KIND)
+	$(V)$(DOCKER_RUN) make --no-print-directory -j$$(nproc) PROJECT_KIND=$(PROJECT_KIND) PROF=$(PROF) CPI=$(CPI) AUTOREPLAY=$(AUTOREPLAY)
 
 docker_pull:
 	$(V)$(ECHO) "[ PULL ]" $(DOCKER_IMAGE)
