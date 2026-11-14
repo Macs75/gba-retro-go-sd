@@ -867,6 +867,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 
 #define arm_psr_store_cpsr(source)                                            \
   const u32 store_mask = cpsr_masks[psr_pfield][PRIVMODE(reg[CPU_MODE])];     \
+  collapse_flags();   /* lazy flags: the bits not stored come from here */    \
   reg[REG_CPSR] = (source & store_mask) | (reg[REG_CPSR] & (~store_mask));    \
   extract_flags();                                                            \
   if(store_mask & 0xFF)                                                       \
@@ -1594,11 +1595,12 @@ cpu_loop_top:
     {
 arm_loop:
 
-       collapse_flags();
-
-       /* Process cheats if we are about to execute the cheat hook */
-       if (reg[REG_PC] == cheat_master_hook)
-          process_cheats();
+       /* LAZY FLAGS: n/z/c/v live in locals and reach reg[REG_CPSR] only
+        * where something reads its flag bits (collapse_flags at MRS, MSR, SWI,
+        * the M4A HLE, the BX to ARM, before every event and every alert); a
+        * collapse before EVERY instruction was ~12% of the device's time
+        * (Kirby, PC sampler, 2026-11-14). The cheat hook is checked with the
+        * idle target after each instruction (IDLE_COND_CHEAT, below). */
 
 #ifdef GBA_M4A_HLE
        /* M4A's software mixer, run natively instead of interpreted.
@@ -1638,6 +1640,7 @@ arm_loop:
        if (reg[REG_PC] == m4a_hook_pc)
        {
           s32 m4a_cycles = cycles_remaining;
+          collapse_flags();   /* the CPSR as the block's first instruction saw it */
           int m4a_rc = m4a_hle_execute(reg, &m4a_cycles,
                                        &n_flag, &z_flag, &c_flag, &v_flag);
           /* The block does its own cycle accounting and, when its budget runs out
@@ -3305,11 +3308,7 @@ thumb_loop:
 #ifdef M4A_COUNT_INSNS
        m4a_insns_interpreted++;
 #endif
-       collapse_flags();
-
-       /* Process cheats if we are about to execute the cheat hook */
-       if (reg[REG_PC] == cheat_master_hook)
-          process_cheats();
+       /* Lazy flags and the cheat hook: as at arm_loop. */
 
        /* Execute THUMB instruction */
 
