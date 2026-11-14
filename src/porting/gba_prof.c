@@ -26,7 +26,8 @@
  * Every figure is cycles of the core clock. busy / budget is the share of
  * the frame the emulation uses.
  *
- * PC SAMPLER: while a replay runs, the firmware's 1 kHz SysTick interrupt
+ * PC SAMPLER (make PCS=1, with PROF=1; off by default: its SD writes stall
+ * the loop and it swaps the interrupt table): while a replay runs, the firmware's 1 kHz SysTick interrupt
  * goes through gba_pcs_systick (the interrupt table copied to RAM, VTOR
  * pointed at the copy -- with the firmware ABI table after it, which cores
  * find at VTOR + 0x400), which counts the interrupted PC in a histogram and
@@ -191,6 +192,7 @@ static void frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited)
     last = frame_t0 = GBA_PROF_NOW();
 }
 
+#ifdef GBA_PCS
 /* ------------------------------------------------------------ PC sampler */
 #define GBA_PCS_BLOCK 1800u            /* replay frames per histogram block */
 #define PCS_MAGIC     0x53435047u      /* "GPCS" */
@@ -302,6 +304,9 @@ static void pcs_dump(uint32_t frame_to, int first)
     }
     pcs_clear();
     gba_pcs_on = on;
+    /* The SD write took ~0.2 s: tell the firmware's pacer, or it skips frames
+     * to catch up (2 frameskips in the next PROF window, every block). */
+    common_emu_frame_loop_reset();
 }
 
 static int pcs_install(void)
@@ -388,4 +393,10 @@ static int pcs_frame(void)
     }
     return 0;
 }
+#else
+/* make PCS=1 adds the PC sampler; without it these are no-ops */
+void gba_prof_set_xip(const void *addr, uint32_t size) { (void)addr; (void)size; }
+void gba_prof_quit(void) {}
+static int pcs_frame(void) { return 0; }
+#endif /* GBA_PCS */
 #endif

@@ -49,8 +49,8 @@ attached to the release:
   `tools/gba_idle_ab.sh` (the skip against none, over a ROM set).
 - `make PROF=1`: a profiling build that prints `PROF/` lines every 120 frames
   (frame budget, the ARM7 / renderer / M4A mixer split, scaling, the LCD and
-  audio waits), and samples the device CPU's PC at 1 kHz while a replay
-  runs (the firmware's SysTick through a handler in ITCM): `<game>.pcs` next
+  audio waits); with `PCS=1` it also samples the device CPU's PC at 1 kHz
+  while a replay runs (the firmware's SysTick through a handler in ITCM): `<game>.pcs` next
   to the ROM, one histogram per 1800 replay frames, read with
   `tools/gba_pcs_report.py` and the build's ELF.
 - Host: `GBA_FAST=1`, `GBA_EXIT_FRAME=N`, `GBA_FRAMESKIP=N`, `GBA_RECORD=1` /
