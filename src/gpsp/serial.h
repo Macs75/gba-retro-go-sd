@@ -26,6 +26,7 @@
 #define SERIAL_MODE_AUTO          6  // Choose best fit automatically
 
 extern int serial_mode;
+extern u32 serial_irq_cycles;   /* cycles to the pending transfer's IRQ, 0: none (serial.c) */
 
 // Register writes
 cpu_alert_type write_siocnt(u16 value);

@@ -150,8 +150,12 @@ u32 function_cc update_gba(int remaining_cycles)
 
     // Timers can trigger DMA (usually sound) and consume cycles
     dma_cycles = update_timers(&irq_raised, completed_cycles);
-    // Check for serial port IRQs as well.
-    if (update_serial(completed_cycles))
+    // Check for serial port IRQs as well -- only when the port can raise one:
+    // with no link device emulated and no transfer pending, update_serial()
+    // does nothing, and it was a flash-resident call at every event (~1% of
+    // the device's time, Kirby).
+    if ((serial_mode != SERIAL_MODE_DISABLED || serial_irq_cycles) &&
+        update_serial(completed_cycles))
       irq_raised |= IRQ_SERIAL;
 
     // Video count tracks the video cycles remaining until the next event
@@ -294,7 +298,7 @@ u32 function_cc update_gba(int remaining_cycles)
     // a video event or a timer event, whatever happens first.
     execute_cycles = MAX(video_count, 0);
     {
-      u32 cc = serial_next_event();
+      u32 cc = serial_irq_cycles ? serial_irq_cycles : ~0U;   /* serial_next_event() */
       execute_cycles = MIN(execute_cycles, cc);
     }
 
