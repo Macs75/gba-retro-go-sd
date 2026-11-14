@@ -123,18 +123,16 @@ CXXFLAGS += $(GBA_WARN_OFF)
 
 # Size-first default (-Os) for cold files. Per-frame / per-sample paths
 # match the firmware GBA core: gba_memory/cpu at -O3, video/sound/HLE at -O2.
-GBA_CFLAGS_O2   = $(filter-out -Os,$(CFLAGS)) -O2
-GBA_CFLAGS_O3   = $(filter-out -Os,$(CFLAGS)) -O3
-GBA_CXXFLAGS_O2 = $(filter-out -Os,$(CXXFLAGS)) -O2
-GBA_CXXFLAGS_O3 = $(filter-out -Os,$(CXXFLAGS)) -O3
-
-$(BUILD_DIR)/gba_memory.o:       CFLAGS   := $(GBA_CFLAGS_O3)
-$(BUILD_DIR)/cpu.o:              CXXFLAGS := $(GBA_CXXFLAGS_O3)
-$(BUILD_DIR)/video.o:            CXXFLAGS := $(GBA_CXXFLAGS_O2)
-$(BUILD_DIR)/sound.o:            CFLAGS   := $(GBA_CFLAGS_O2)
-$(BUILD_DIR)/gba_bios_hle.o:     CFLAGS   := $(GBA_CFLAGS_O2)
-$(BUILD_DIR)/m4a_hle.o:          CFLAGS   := $(GBA_CFLAGS_O2)
-$(BUILD_DIR)/m4a_gpsp.o:         CFLAGS   := $(GBA_CFLAGS_O2)
+# Only OPT is overridden: CFLAGS stays recursive, so its -MF"$(@:%.o=%.d)"
+# is expanded per object (rebuilding CFLAGS with := expanded $@ empty and
+# lost the dependency files and -DUSE_HAL_DRIVER of these objects).
+$(BUILD_DIR)/gba_memory.o:       OPT := -O3
+$(BUILD_DIR)/cpu.o:              OPT := -O3
+$(BUILD_DIR)/video.o:            OPT := -O2
+$(BUILD_DIR)/sound.o:            OPT := -O2
+$(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2
+$(BUILD_DIR)/m4a_hle.o:          OPT := -O2
+$(BUILD_DIR)/m4a_gpsp.o:         OPT := -O2
 
 #######################################
 # Pack

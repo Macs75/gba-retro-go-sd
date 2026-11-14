@@ -23,6 +23,9 @@ extern uint32_t __CORE_CODE_END__;
 extern retro_emulator_file_t *ACTIVE_FILE;
 extern common_emu_state_t common_emu_state;
 extern uint32_t ram_start;
+/* the LCD's frame counter: a macro on device too (gw_core_bridge.h), so it
+ * never meets gpSP's own frame_counter (emulated frames, the RTC clock) */
+#define frame_counter host_lcd_frame_counter
 extern uint32_t frame_counter;
 extern uint32_t dma_counter;
 extern uint32_t common_emu_sound_dma_marker;
