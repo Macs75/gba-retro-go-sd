@@ -20,6 +20,7 @@
 
 extern "C" {
   #include "common.h"
+  #include "gba_prof.h"
 }
 
 u16* gba_screen_pixels = NULL;
@@ -2366,6 +2367,7 @@ void update_scanline(void)
   if(skip_next_frame)
     return;
 
+  GBA_PROF_START(GBA_PART_PPU);
   // If OAM has been modified since the last scanline has been updated then
   // reorder and reprofile the OBJ lists.
   if(reg[OAM_UPDATED])
@@ -2407,6 +2409,7 @@ void update_scanline(void)
       affine_reference_y[1] += (s16)read_ioreg(REG_BG3PD);
     }
   }
+  GBA_PROF_STOP(GBA_PART_PPU);
 }
 
 

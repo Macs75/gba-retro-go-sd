@@ -1321,6 +1321,11 @@ static void rtc_init_base_time(void)
   rtc_base_time = (s64)t;
 }
 
+/* the record/replay's power-on (src/porting/gba_rec.c): a replay runs the
+ * cart clock from the base time it was recorded with */
+s64 gba_rtc_base_get(void) { return rtc_base_time; }
+void gba_rtc_base_set(s64 t) { rtc_base_time = t; }
+
 static time_t rtc_current_time(void)
 {
   return (time_t)(rtc_base_time +

@@ -22,6 +22,7 @@
  *      catches it.
  */
 #include "m4a_hle.h"
+#include "gba_prof.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -261,7 +262,12 @@ int m4a_hle_execute(unsigned int *regs, int *cycles,
     st.n = *n; st.z = *z; st.c = *c; st.v = *v;
     st.pc = m4a_hook_pc;       /* the block's base; CHK() builds resume PCs from it */
 
+    GBA_PROF_START(GBA_PART_M4A);
     rc = s_variant->run(&st, &s_bus);
+    GBA_PROF_STOP(GBA_PART_M4A);
+#if defined(GBA_PROF) && !defined(HOST_BUILD)
+    gba_prof_m4a_calls++;
+#endif
     if (rc == M4A_DECLINED)
         return M4A_DECLINED;
 

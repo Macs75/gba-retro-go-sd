@@ -1438,6 +1438,15 @@ const u32 cpu_modes[16] =
 // shadowing it since it has a constant 1bit represenation.
 
 u32 instruction_count = 0;
+#ifdef GBA_PCHIST
+extern "C" int gba_pchist_on;
+extern "C" void gba_pchist_hit(u32 pc, int thumb);
+#endif
+#ifdef GBA_ICOUNT
+/* ARM + Thumb instructions interpreted (the M4A HLE's blocks not included):
+ * host REC/icount lines, device PROF/cpi */
+u32 gba_icount;
+#endif
 
 void set_cpu_mode(cpu_mode_type new_mode)
 {
@@ -1684,6 +1693,10 @@ arm_loop:
        check_pc_region();
        reg[REG_PC] &= ~0x03;
        opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
+#ifdef GBA_PCHIST
+       if (gba_pchist_on > 0)
+          gba_pchist_hit(reg[REG_PC], 0);   /* host: tools/gba_pchist.py */
+#endif
        condition = opcode >> 28;
 
        switch(condition)
@@ -3316,6 +3329,10 @@ thumb_loop:
        check_pc_region();
        reg[REG_PC] &= ~0x01;
        opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
+#ifdef GBA_PCHIST
+       if (gba_pchist_on > 0)
+          gba_pchist_hit(reg[REG_PC], 1);
+#endif
 
        #ifdef TRACE_INSTRUCTIONS
        interp_trace_instruction(reg[REG_PC], 0);

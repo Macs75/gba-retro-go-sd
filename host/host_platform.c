@@ -265,7 +265,10 @@ int host_platform_audio_start(int rate, int half_len)
     want.freq = sample_rate;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
-    want.samples = (Uint16)(audio_half > 0 ? audio_half : 256);
+    /* SDL's own buffer, not the device's DMA half: a short one (the GBA core's
+     * is 201 samples, 4.2 ms) is consumed in whole-millisecond sleeps by some
+     * drivers (dummy: 201 per 5 ms, the game at 50 fps) */
+    want.samples = 1024;
     want.callback = NULL;
     audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (!audio_dev) {

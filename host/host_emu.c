@@ -279,8 +279,40 @@ void *lcd_get_inactive_buffer(void)
     return active_framebuffer ? framebuffer1 : framebuffer2;
 }
 
+/* GBA_SHOT=<n>:<file.ppm>: the picture presented at the n-th swap, as the
+ * LCD shows it (320x240). GBA_SCALING=off|fit|full, GBA_FILTER=hard|soft:
+ * the display settings (host defaults otherwise). */
+static void host_shot(void)
+{
+    static long at = -2;
+    static char path[256];
+    static long n;
+    if (at == -2) {
+        const char *e = getenv("GBA_SHOT");
+        at = -1;
+        if (e && sscanf(e, "%ld:%255s", &at, path) != 2)
+            at = -1;
+    }
+    if (at < 0 || n++ != at)
+        return;
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+    const uint16_t *p = (const uint16_t *)lcd_get_active_buffer();
+    fprintf(f, "P6\n%d %d\n255\n", GW_LCD_WIDTH, GW_LCD_HEIGHT);
+    for (int i = 0; i < GW_LCD_WIDTH * GW_LCD_HEIGHT; i++) {
+        uint16_t c = p[i];
+        unsigned char rgb[3] = { (unsigned char)((c >> 11) << 3), (unsigned char)(((c >> 5) & 63) << 2),
+                                 (unsigned char)((c & 31) << 3) };
+        fwrite(rgb, 1, 3, f);
+    }
+    fclose(f);
+    printf("host: picture of swap %ld -> %s\n", at, path);
+}
+
 void lcd_swap(void)
 {
+    host_shot();
     host_poll_events();
     host_platform_present_rgb565((const uint16_t *)lcd_get_active_buffer(),
                                  GW_LCD_WIDTH, GW_LCD_HEIGHT);
@@ -383,11 +415,13 @@ void audio_clear_buffers(void)
     memset(audio_half_bufs, 0, sizeof(audio_half_bufs));
 }
 
+static int host_fast(void);
+
 void common_emu_sound_sync(bool use_nops)
 {
     (void)use_nops;
     host_poll_events();
-    if (audio_started && !audio_muted && !audio_mute) {
+    if (audio_started && !audio_muted && !audio_mute && !host_fast()) {
         int16_t *buf = audio_get_active_buffer();
         uint16_t len = audio_get_buffer_length();
         host_platform_audio_queue(buf, (int)len);
@@ -447,13 +481,46 @@ void odroid_audio_submit(short *stereoAudioBuffer, int frameCount)
 
 /* --- Frame pacing --------------------------------------------------------- */
 
+/* GBA_FAST=1: unthrottled -- no frame pacing, no audio queue (replays and
+ * hash runs, with SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy).
+ * GBA_EXIT_FRAME=N: exit after N emulated frames.
+ * GBA_FRAMESKIP=N: skip drawing N frames of every N+1, as the device's
+ * frameskip does (the emulation must not depend on it: REC/hash lines). */
+static int host_env_int(const char *name, int def)
+{
+    const char *e = getenv(name);
+    return e && e[0] ? atoi(e) : def;
+}
+
+static int host_fast(void)
+{
+    static int f = -1;
+    if (f < 0)
+        f = host_env_int("GBA_FAST", 0) != 0;
+    return f;
+}
+
 bool common_emu_frame_loop(void)
 {
     uint32_t now;
     uint32_t target_ms;
+    static int exit_at = -2, skip = -1;
+    static uint32_t frames;
 
     host_poll_events();
     host_maybe_quit();
+
+    if (exit_at == -2)
+        exit_at = host_env_int("GBA_EXIT_FRAME", -1);
+    if (skip < 0)
+        skip = host_env_int("GBA_FRAMESKIP", 0);
+    if (exit_at >= 0 && frames >= (uint32_t)exit_at) {
+        printf("host: exit at frame %lu\n", (unsigned long)frames);
+        exit(0);
+    }
+    frames++;
+    if (host_fast())
+        return skip <= 0 || frames % (uint32_t)(skip + 1) == 0;
 
     target_ms = common_emu_state.frame_time_10us
                     ? (uint32_t)((common_emu_state.frame_time_10us + 50) / 100)
@@ -490,7 +557,65 @@ void common_ingame_overlay(void) {}
 void common_emu_enable_dwt_cycles(void) {}
 unsigned int common_emu_get_dwt_cycles(void) { return 0; }
 void common_emu_clear_dwt_cycles(void) {}
-void cpumon_sleep(void) {}
+/* The firmware's ISR-fed PCM ring (gw_audio.c pcm_fill), for the host: the
+ * core attaches its ring, and "sleeping until the next interrupt" is that
+ * interrupt -- one DMA half played from the ring (cpumon_sleep). */
+static int16_t *host_pcm_ring;
+static int host_pcm_mask, host_pcm_owns, host_pcm_vol = 256, host_pcm_silent;
+static volatile uint16_t *host_pcm_head, *host_pcm_tail;
+
+void pcm_attach(int16_t *ring, int size, volatile uint16_t *head, volatile uint16_t *tail)
+{
+    host_pcm_ring = ring;
+    host_pcm_mask = size - 1;
+    host_pcm_head = head;
+    host_pcm_tail = tail;
+}
+void pcm_audio_enable(int on) { host_pcm_owns = on ? 1 : 0; }
+void pcm_audio_set(int vol, int play) { host_pcm_vol = vol; host_pcm_silent = !play; }
+void pcm_audio_setpos(uint32_t p) { (void)p; }
+uint32_t pcm_audio_pos(void) { return 0; }
+
+void cpumon_sleep(void)
+{
+    int16_t *buf = audio_half_bufs[audio_active_half & 1];
+    int len = audio_half_len ? audio_half_len : 1;
+
+    if (host_pcm_owns) {
+        uint16_t tail = *host_pcm_tail, head = *host_pcm_head;
+        for (int i = 0; i < len; i++) {
+            int16_t v = 0;
+            if (!host_pcm_silent && host_pcm_ring && tail != head) {
+                v = host_pcm_ring[tail];
+                tail = (uint16_t)((tail + 1) & host_pcm_mask);
+            }
+            buf[i] = (int16_t)((v * host_pcm_vol) >> 8);
+        }
+        if (!host_pcm_silent)
+            *host_pcm_tail = tail;
+    }
+    host_poll_events();
+    if (audio_started && !audio_muted && !audio_mute && !host_fast()) {
+        host_platform_audio_queue(buf, len);
+        while (host_platform_audio_queued_samples() > 2400) {   /* ~50 ms queued */
+            host_platform_delay_ms(1);
+            host_poll_events();
+            host_maybe_quit();
+        }
+    }
+    audio_active_half ^= 1;
+    dma_counter++;
+    host_maybe_quit();
+}
+
+/* the speed-up setting, the LCD's swap and scan position, for the host */
+rg_app_desc_t *odroid_system_get_app(void)
+{
+    static rg_app_desc_t app;   /* speedupEnabled = SPEEDUP_1x */
+    return &app;
+}
+uint32_t lcd_is_swap_pending(void) { return 0; }
+uint32_t lcd_get_pixel_position(void) { return 100; }
 void cpumon_busy(void) {}
 void cpumon_reset(void) {}
 
@@ -941,7 +1066,22 @@ void imlib_draw_image(image_t *dst_img, image_t *src_img, int dst_x_start, int d
 static odroid_display_scaling_t host_scaling = ODROID_DISPLAY_SCALING_FIT;
 static odroid_display_filter_t host_filter = ODROID_DISPLAY_FILTER_OFF;
 
-odroid_display_scaling_t odroid_display_get_scaling_mode(void) { return host_scaling; }
+odroid_display_scaling_t odroid_display_get_scaling_mode(void)
+{
+    static int env = -1;
+    if (env < 0) {
+        const char *e = getenv("GBA_SCALING");
+        env = 0;
+        if (e) {
+            env = 1;
+            host_scaling = !strcmp(e, "off") ? ODROID_DISPLAY_SCALING_OFF :
+                           !strcmp(e, "full") ? ODROID_DISPLAY_SCALING_FULL : ODROID_DISPLAY_SCALING_FIT;
+            if (getenv("GBA_FILTER") && !strcmp(getenv("GBA_FILTER"), "soft"))
+                host_filter = ODROID_DISPLAY_FILTER_SOFT;
+        }
+    }
+    return host_scaling;
+}
 void odroid_display_set_scaling_mode(odroid_display_scaling_t mode) { host_scaling = mode; }
 odroid_display_filter_t odroid_display_get_filter_mode(void) { return host_filter; }
 void odroid_display_set_filter_mode(odroid_display_filter_t mode) { host_filter = mode; }
