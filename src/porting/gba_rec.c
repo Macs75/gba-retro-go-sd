@@ -65,6 +65,8 @@ static uint32_t rec_frame, rec_rom_hash, rec_setup_hash, rec_audio_h;
 static uint16_t *rec_buf;            /* AHB heap at the first use */
 static uint32_t rec_n, rec_pos;
 static char rec_file[300];
+static void rec_print_hash(void);
+static uint32_t rec_hashed_at = 0xFFFFFFFFu;   /* the frame of the last REC/hash line */
 
 uint32_t gba_rec_fnv(const void *p, uint32_t n, uint32_t h)
 {
@@ -97,6 +99,8 @@ void gba_rec_close(void)
         return;
     }
     if (rec_mode == GBA_REC_RECORD) {
+        if (rec_frame != rec_hashed_at)
+            rec_print_hash();  /* the recording's end: a replay prints the same line */
         rec_flush();
         rec_hdr.frames = rec_frame;
         fseek(rec_f, 0, SEEK_SET);
@@ -177,6 +181,7 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
     }
     rec_mode = mode;
     rec_frame = 0;
+    rec_hashed_at = 0xFFFFFFFFu;
     rec_audio_h = FNV0;
     rec_n = rec_pos = 0;
     power_on();
@@ -226,6 +231,8 @@ uint16_t gba_rec_input(uint16_t live)
             rec_n = (uint32_t)fread(rec_buf, sizeof(uint16_t), REC_BUF, rec_f);
             rec_pos = 0;
             if (!rec_n) {
+                if (rec_frame != rec_hashed_at)
+                    rec_print_hash();  /* the replay's end, whatever its length */
                 printf("REC: replay finished at frame %lu, live input from here\n",
                        (unsigned long)rec_frame);
                 gba_rec_close();
@@ -244,6 +251,45 @@ static uint32_t cpu_hash(void)
     h = fnv(spsr, sizeof(spsr), h);
     h = fnv(reg_mode, sizeof(reg_mode), h);
     return h;
+}
+
+/* the REC/hash line: the RAM regions a savestate streams, the CPU, the
+ * audio so far */
+static void rec_print_hash(void)
+{
+    unsigned n;
+    const gba_bulk_region_t *rg = gba_bulk_regions(&n);
+    uint32_t h[6] = { 0 };
+    rec_hashed_at = rec_frame;
+    for (unsigned i = 0; i < n && i < 6; i++)
+        h[i] = fnv(rg[i].ptr, rg[i].len, FNV0);
+#ifdef HOST_BUILD
+    {   /* interpreted instructions per frame since the last line (cpu.cc) */
+        extern uint32_t gba_icount;
+        static uint32_t last_i, last_f;
+        if (rec_frame <= last_f)          /* a new replay */
+            last_f = 0;
+        extern uint32_t gba_idle_skipped, gba_idle_skips, gba_idle_arms, gba_idle_rejects;
+        extern uint32_t gba_idle_heads;
+        static uint32_t last_sk, last_n, last_h;
+        printf("REC/icount frame=%lu instr=%lu per frame, idle: skipped=%lu cycles per frame in %lu skips, arms=%lu rejects=%lu heads=%lu per frame\n",
+               (unsigned long)rec_frame,
+               (unsigned long)((gba_icount - last_i) / (rec_frame - last_f)),
+               (unsigned long)((gba_idle_skipped - last_sk) / (rec_frame - last_f)),
+               (unsigned long)(gba_idle_skips - last_n),
+               (unsigned long)gba_idle_arms, (unsigned long)gba_idle_rejects,
+               (unsigned long)((gba_idle_heads - last_h) / (rec_frame - last_f)));
+        last_h = gba_idle_heads;
+        last_i = gba_icount;
+        last_f = rec_frame;
+        last_sk = gba_idle_skipped;
+        last_n = gba_idle_skips;
+    }
+#endif
+    printf("REC/hash frame=%lu iwram=%08lx ewram=%08lx vram=%08lx oam=%08lx pal=%08lx io=%08lx cpu=%08lx audio=%08lx\n",
+           (unsigned long)rec_frame, (unsigned long)h[0], (unsigned long)h[1],
+           (unsigned long)h[2], (unsigned long)h[3], (unsigned long)h[4],
+           (unsigned long)h[5], (unsigned long)cpu_hash(), (unsigned long)rec_audio_h);
 }
 
 void gba_rec_audio(const int16_t *audio, int pairs)
@@ -269,33 +315,5 @@ void gba_rec_frame_done(void)
     if (rec_frame % 120u)
         return;
 #endif
-    unsigned n;
-    const gba_bulk_region_t *rg = gba_bulk_regions(&n);
-    uint32_t h[6] = { 0 };
-    for (unsigned i = 0; i < n && i < 6; i++)
-        h[i] = fnv(rg[i].ptr, rg[i].len, FNV0);
-#ifdef HOST_BUILD
-    {   /* interpreted instructions per frame since the last line (cpu.cc) */
-        extern uint32_t gba_icount;
-        static uint32_t last_i, last_f;
-        if (rec_frame <= last_f)          /* a new replay */
-            last_f = 0;
-        extern uint32_t gba_idle_skipped, gba_idle_skips, gba_idle_arms, gba_idle_rejects;
-        static uint32_t last_sk, last_n;
-        printf("REC/icount frame=%lu instr=%lu per frame, idle: skipped=%lu cycles per frame in %lu skips, arms=%lu rejects=%lu\n",
-               (unsigned long)rec_frame,
-               (unsigned long)((gba_icount - last_i) / (rec_frame - last_f)),
-               (unsigned long)((gba_idle_skipped - last_sk) / (rec_frame - last_f)),
-               (unsigned long)(gba_idle_skips - last_n),
-               (unsigned long)gba_idle_arms, (unsigned long)gba_idle_rejects);
-        last_i = gba_icount;
-        last_f = rec_frame;
-        last_sk = gba_idle_skipped;
-        last_n = gba_idle_skips;
-    }
-#endif
-    printf("REC/hash frame=%lu iwram=%08lx ewram=%08lx vram=%08lx oam=%08lx pal=%08lx io=%08lx cpu=%08lx audio=%08lx\n",
-           (unsigned long)rec_frame, (unsigned long)h[0], (unsigned long)h[1],
-           (unsigned long)h[2], (unsigned long)h[3], (unsigned long)h[4],
-           (unsigned long)h[5], (unsigned long)cpu_hash(), (unsigned long)rec_audio_h);
+    rec_print_hash();
 }

@@ -64,6 +64,9 @@ extern unsigned int m4a_hook_pc;
 uint32_t gba_idle_sidefx;
 uint32_t gba_idle_skipped, gba_idle_skips, gba_idle_arms, gba_idle_rejects;
 uint32_t gba_idle_head_pc = 0xFFFFFFFFu;
+#ifdef HOST_BUILD
+uint32_t gba_idle_heads;      /* arrivals at the armed head (REC/icount) */
+#endif
 
 static int enabled, bug, log_on;
 static uint32_t seq, last_pc = 0xFFFFFFFFu, head = 0xFFFFFFFFu, tail;
@@ -301,6 +304,9 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
 GBA_IDLE_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint32_t c, uint32_t v)
 {
     uint32_t flags = n | z << 1 | c << 2 | v << 3, mode = reg[16] & 0xFFu;
+#ifdef HOST_BUILD
+    gba_idle_heads++;
+#endif
 
     if (probe_ok && probe_seq == seq) {
         if (probe_fx == gba_idle_sidefx && flags == probe_flags && mode == probe_mode &&

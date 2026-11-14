@@ -34,7 +34,9 @@ attached to the release:
   problem or comparing performance. A replay uses the recording's cart
   save, so the player's save file is not written for the rest of that
   session. Every 120 frames both log `REC/hash` lines (RAM, video, CPU and
-  audio hashes): two runs of one recording must print the same lines.
+  audio hashes): two runs of one recording must print the same lines. A
+  replay or recording also ends with a `REC/hash` line for its last frame
+  (unless that frame was just hashed), so the very end can be compared.
 - **Generic poll-loop skip, for every game**: loops that only read and
   compare (waiting on DISPSTAT, VCOUNT or a RAM flag an interrupt sets) are
   found while the game runs, and their passes are skipped up to the next
