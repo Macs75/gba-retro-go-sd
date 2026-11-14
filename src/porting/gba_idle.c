@@ -19,7 +19,8 @@
  *     to its head) and check the body: loads, register arithmetic,
  *     compares, branches -- no store, call, SWI, stack or PC write. The
  *     head becomes idle_loop_target_pc (IDLE_COND_GENERIC). A rejected
- *     loop is remembered and not decoded again.
+ *     loop is remembered by its head; other code by 64-byte block, decoded
+ *     again only at every 16th event pair landing in the block.
  *  2. PROVE (gba_idle_head, each time the PC comes to the head): the first
  *     arrival after an event takes a snapshot of r0-r14, the flags, the
  *     mode, the cycles left, the event and side-effect counters. The next
@@ -51,6 +52,8 @@
 #define NEAR       64u                 /* bytes between two events' PCs */
 #define MAX_FAILS  8u
 #define NBLACK     32u                 /* rejected spots, by 64-byte block */
+#define NHEADS     32u                 /* rejected loops, by head */
+#define RETRY      16u                 /* a rejected block: decode every 16th pair */
 
 extern uint32_t idle_loop_target_pc, idle_loop_cond;
 extern uint32_t reg[64];
@@ -65,7 +68,8 @@ uint32_t gba_idle_head_pc = 0xFFFFFFFFu;
 static int enabled, bug, log_on;
 static uint32_t seq, last_pc = 0xFFFFFFFFu, head = 0xFFFFFFFFu, tail;
 static int last_thumb, head_thumb;
-static uint32_t black[NBLACK], black_n;
+static uint32_t black[NBLACK], black_n, black_hits;
+static uint32_t black_head[NHEADS], black_head_n;
 /* the probe: the machine at the head after the first arrival */
 static int probe_ok;
 static uint32_t probe_seq, probe_fx, probe_reg[15], probe_mode, probe_flags, fails;
@@ -83,8 +87,9 @@ void gba_idle_reset(void)
 {
     disarm();
     last_pc = 0xFFFFFFFFu;
-    black_n = 0;
+    black_n = black_head_n = black_hits = 0;
     memset(black, 0xff, sizeof black);
+    memset(black_head, 0xff, sizeof black_head);
     seq++;
 }
 
@@ -106,10 +111,15 @@ void gba_idle_enable(void)
     printf("gba: generic poll-loop skip on\n");
 }
 
-/* Rejected code is remembered by 64-byte block, not by PC: two events
- * landing near each other in code that is not a poll loop (a long loop with
- * stores, a busy routine) land at many PCs, and each one used to be decoded
- * again (thumb_ok was 0.6% of the device's time, Kirby). */
+/* Code that is not a poll loop is remembered by 64-byte block, not by PC:
+ * two events landing near each other in it (a long loop with stores, a busy
+ * routine) land at many PCs, and each one used to be decoded again
+ * (thumb_ok was 0.6% of the device's time, Kirby). But a block can also
+ * hold a real poll loop next to the rejected spot, so every RETRY-th event
+ * pair landing in a rejected block is decoded anyway: blocking the block
+ * outright cost 18 of the 150 games most of their skip (Broken Sword 12K
+ * interpreted instructions a frame -> 73K). A loop whose passes differ is
+ * remembered by its exact head instead. */
 #ifndef HOST_BUILD
 #define GBA_IDLE_HOT __attribute__((section(".gba_itcm_text")))
 #else
@@ -127,7 +137,16 @@ GBA_IDLE_HOT static int blacklisted(uint32_t pc)
 
 static void blacklist(uint32_t pc)
 {
-    black[black_n++ % NBLACK] = pc >> 6;
+    if (!blacklisted(pc))
+        black[black_n++ % NBLACK] = pc >> 6;
+}
+
+GBA_IDLE_HOT static int head_rejected(uint32_t h)
+{
+    for (uint32_t i = 0; i < NHEADS; i++)
+        if (black_head[i] == h)
+            return 1;
+    return 0;
 }
 
 static const uint8_t *code_at(uint32_t a)
@@ -260,9 +279,9 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
         return;                            /* still in the armed loop */
     if (pc == 0xFFFFFFFFu || thumb != prev_thumb || pc - prev + NEAR > 2u * NEAR)
         return;                            /* not two events in one short loop */
-    if (blacklisted(pc & ~(thumb ? 1u : 3u)))
+    if (blacklisted(pc) && (++black_hits % RETRY))
         return;
-    if (!find_loop(pc, thumb, &h, &t) || blacklisted(h)) {
+    if (!find_loop(pc, thumb, &h, &t) || head_rejected(h)) {
         blacklist(pc);
         return;
     }
@@ -301,6 +320,7 @@ GBA_IDLE_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint3
             if (log_on)
                 printf("IDLE: rejected loop %08lx (passes differ)\n", (unsigned long)head);
             gba_idle_rejects++;
+            black_head[black_head_n++ % NHEADS] = head;
             blacklist(head);
             disarm();
             return cycles;

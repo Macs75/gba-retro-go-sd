@@ -98,6 +98,11 @@ attached to the release:
 
 ### Fixed
 
+- The generic poll-loop skip lost real poll loops that shared a 64-byte
+  block with rejected code: rejected loops are now remembered by their head,
+  and a rejected block is decoded again at every 16th event pair. 18 of the
+  150 host games had lost most of their skip (Broken Sword ran 73K
+  interpreted instructions a frame instead of 12K).
 - Pacing: the loop locked onto the LCD (60 Hz set, ~59.64 Hz real) because
   drawing slept until the last swap showed; it then never waited for the
   audio, which slowly underran, and the frameskip's rounded frame time
