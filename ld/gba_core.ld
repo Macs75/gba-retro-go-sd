@@ -175,6 +175,7 @@ SECTIONS
     build/gba_timing.o (.text .text*)
     build/gba_idle.o (.text .text*)
     build/gba_scale.o (.text .text*)
+    *(.gba_cold_text*)       /* cold cpu.o code: power-on, savestates */
   } >GBA_CODE
 
   .rodata_gba :

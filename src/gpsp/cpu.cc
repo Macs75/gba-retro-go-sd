@@ -1624,6 +1624,15 @@ u8 vram[1024 * 96];
 u16 io_registers[512];
 #endif
 
+/* Cold cpu.o code (power-on, savestates) goes to the XIP flash with the
+ * rest of the cold code (ld/gba_core.ld .xip_gba), not to ITCM with the
+ * interpreter; gba.xip is cached before reset_gba() runs. */
+#ifndef HOST_BUILD
+#define GBA_CPU_COLD __attribute__((section(".gba_cold_text")))
+#else
+#define GBA_CPU_COLD
+#endif
+
 /* bit nzcv (n<<3 | z<<2 | c<<1 | v) of arm_cond_pass[cond]: the ARM condition
  * passes. EQ NE CS CC MI PL VS VC HI LS GE LT GT LE AL NV */
 static const u16 arm_cond_pass[16] = {
@@ -3879,7 +3888,7 @@ thumb_loop_pc:
   }
 }
 
-void init_cpu(void)
+GBA_CPU_COLD void init_cpu(void)
 {
   // Initialize CPU registers
   memset(reg, 0, REG_USERDEF * sizeof(u32));
@@ -3919,7 +3928,7 @@ void init_cpu(void)
   REG_MODE(MODE_SUPERVISOR)[5] = 0x03007FE0;
 }
 
-bool cpu_check_savestate(const u8 *src)
+GBA_CPU_COLD bool cpu_check_savestate(const u8 *src)
 {
   const u8 *cpudoc = bson_find_key(src, "cpu");
   if (!cpudoc)
@@ -3932,7 +3941,7 @@ bool cpu_check_savestate(const u8 *src)
 }
 
 
-bool cpu_read_savestate(const u8 *src)
+GBA_CPU_COLD bool cpu_read_savestate(const u8 *src)
 {
   const u8 *cpudoc = bson_find_key(src, "cpu");
   return bson_read_int32(cpudoc, "bus-value", &reg[REG_BUS_VALUE]) &&
@@ -3941,7 +3950,7 @@ bool cpu_read_savestate(const u8 *src)
          bson_read_int32_array(cpudoc, "regmod", (u32*)reg_mode, 7*7);
 }
 
-unsigned cpu_write_savestate(u8 *dst)
+GBA_CPU_COLD unsigned cpu_write_savestate(u8 *dst)
 {
   u8 *wbptr, *startp = dst;
   bson_start_document(dst, "cpu", wbptr);

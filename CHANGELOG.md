@@ -99,6 +99,8 @@ attached to the release:
   listed registers; Thumb's idle-target compare uses a local copy. Device,
   Tony Hawk's Underground: -8.4% interpreter cycles, 4,926 -> 5,200
   pictures shown of 5,640, windows at a full 59.7 fps 15 -> 29 of 47.
+- Interpreter code size: power-on and savestate code moved from ITCM to the
+  XIP flash with the rest of the cold code.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial
