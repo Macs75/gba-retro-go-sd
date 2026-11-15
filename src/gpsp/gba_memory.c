@@ -19,6 +19,7 @@
 
 #include "common.h"
 #include "streams/file_stream.h"
+#include "gba_hle.h"
 
 /* Sound */
 #define gbc_sound_tone_control_low(channel, regn)                             \
@@ -360,6 +361,16 @@ u8 gamepak_backup[1024 * 128];
 
 u32 dma_bus_val;
 dma_transfer_type dma[4];
+/* set by load_gamepak before anything runs; at the end of .bss (a .data
+ * word here would move all the RAM code after it) */
+#ifndef HOST_BUILD
+u32 game_hle_pc __attribute__((section(".gba_tail_bss")));
+u32 game_hle_size __attribute__((section(".gba_tail_bss")));
+unsigned long long (*game_hle_fn)(u32, s32, u32) __attribute__((section(".gba_tail_bss")));
+#else
+u32 game_hle_pc, game_hle_size;
+unsigned long long (*game_hle_fn)(u32, s32, u32);
+#endif
 
 // ROM memory is allocated in blocks of 1MB to better map the native block
 // mapping system. We will try to allocate 32 of them to allow loading
@@ -3085,6 +3096,7 @@ GBA_COLD u32 load_gamepak(const struct retro_game_info* info, const char *name,
 
    idle_loop_target_pc = 0xFFFFFFFF;
    idle_loop_cond = IDLE_COND_ALWAYS;
+   gba_hle_select(game_code);   /* a game's native routine, if it has one (src/hle) */
    translation_gate_targets = 0;
    flash_device_id = FLASH_DEVICE_MACRONIX_64KB;
    flash_bank_cnt = FLASH_SIZE_64KB;

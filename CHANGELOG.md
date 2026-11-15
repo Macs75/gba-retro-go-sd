@@ -162,6 +162,13 @@ attached to the release:
   set and the blended layers' instances) run from RAM instead of the flash.
   Device, F-Zero: Maximum Velocity's race: drawing -5.1% per drawn frame,
   frames skipped 246 -> 157.
+- Game HLE: a game whose frame is dominated by one guest routine can have it
+  run natively, with the interpreter's exact memory accesses, cycle charges
+  and stopping points (same state hashes). Each routine is an overlay linked
+  to an ITCM window, stored in gba.xip and copied there only when its game
+  loads (`src/hle/`). First: V-Rally 3's textured-polygon rasterizer, 40% of
+  its race. Device, the race: emulation 7.09M -> 5.3M cycles a frame (90% of
+  the budget), 15 -> 53 frames shown a second.
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the

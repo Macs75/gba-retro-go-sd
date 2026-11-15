@@ -39,11 +39,13 @@ src/main_gba.c \
 src/porting/gba_bios_hle.c \
 src/m4a/m4a_hle.c \
 src/m4a/m4a_gpsp.c \
-src/porting/bilinear.c
+src/porting/bilinear.c \
+src/hle/gba_hle_table.c
 
 CORE_CXX_SOURCES := \
 src/gpsp/cpu.cc \
-src/gpsp/video.cc
+src/gpsp/video.cc \
+src/hle/hle_vrally3.cc
 
 CORE_ASM_SOURCES := \
 src/porting/gba_bios.S
@@ -52,7 +54,8 @@ CORE_C_INCLUDES := \
 -Isrc/gpsp \
 -Isrc/gpsp/libretro/libretro-common/include \
 -Isrc/m4a \
--Isrc/porting
+-Isrc/porting \
+-Isrc/hle
 
 # Relative path so Docker bind-mounts work (do NOT use $(abspath)).
 GNW_CORE_SDK ?= sdk
@@ -86,6 +89,9 @@ CORE_C_DEFS := \
 
 PACKED_BIN  := $(CORE_NAME).bin
 XIP_BIN     := $(CORE_NAME).xip
+# The game HLE overlays (ld/gba_core.ld OVERLAY), stored in gba.xip after the
+# flash data: one per src/hle/hle_<game>.cc.
+GBA_HLE_OVERLAYS := gba_hle_vrally3
 PAD_LOGO    := src/assets/pad.bmp
 HEADER_LOGO := src/assets/header.bmp
 
@@ -192,6 +198,8 @@ $(BUILD_DIR)/gba_memory.o:       OPT := -O3
 # the base of `str rX, [rY, #60]` (the PC store) if cpu.cc changes.
 $(BUILD_DIR)/cpu.o:              OPT := -O3 --param max-goto-duplication-insns=40 -fno-crossjumping -fno-tree-tail-merge -fno-tree-pre -fira-region=one
 $(BUILD_DIR)/video.o:            OPT := -O2
+# GCC: the game HLEs at -O2: at -O3 V-Rally 3's was 6.5 KB, over its ITCM window
+$(BUILD_DIR)/hle_vrally3.o:      OPT := -O2
 $(BUILD_DIR)/sound.o:            OPT := -O2
 $(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2
 # GCC: -mlong-calls makes the M4A mixers copy-safe: their calls into the
@@ -208,7 +216,8 @@ $(BUILD_DIR)/m4a_gpsp.o:         OPT := -O2
 
 $(XIP_BIN): $(TARGET_ELF)
 	$(V)$(ECHO) [ XIP ] $(XIP_BIN)
-	$(V)$(CP) -O binary --only-section=.xip_gba --only-section=.rodata_gba $< $@
+	$(V)$(CP) -O binary --only-section=.xip_gba --only-section=.rodata_gba \
+		$(foreach o,$(GBA_HLE_OVERLAYS),--only-section=$(o)) $< $@
 	$(V)$(SZ) --target=binary $@
 
 pack: $(TARGET_BIN) $(BUILD_DIR)/gba_core_itcm.bin $(XIP_BIN) $(PAD_LOGO) $(HEADER_LOGO)

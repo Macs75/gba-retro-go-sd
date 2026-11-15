@@ -159,6 +159,11 @@ extern u8 *ram_translation_ptr;
 #define MAX_TRANSLATION_GATES 8
 
 extern u32 idle_loop_target_pc;
+/* A game-specific native routine (src/hle/gba_hle.h): its code range in
+ * guest memory [game_hle_pc, +game_hle_size) and its entry, or size 0; set
+ * by load_gamepak (gba_hle_select). */
+extern u32 game_hle_pc, game_hle_size;
+extern unsigned long long (*game_hle_fn)(u32 pc, s32 cycles, u32 nzcv);
 /* When to burn the slice at idle_loop_target_pc.
  *
  * ALWAYS is the classic table semantic: the pc is inside a loop that only an

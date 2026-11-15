@@ -1067,6 +1067,9 @@ static __attribute__((noinline)) cpu_alert_type cpu_store32(u32 a, u32 v)
   return write_memory32(a, v);
 }
 
+/* the word store, for the game HLEs (src/hle) */
+extern "C" u32 cpu_hle_store32(u32 a, u32 v) { return cpu_store32(a, v); }
+
 #define fast_read_memory(size, type, addr, dest, readfn)                      \
 {                                                                             \
   u8 *map;                                                                    \
@@ -2363,6 +2366,24 @@ arm_loop_pc:
              }
              if (m4a_rc == 3)
                 return;
+          }
+          /* A game's native routine (src/hle, gba_hle.h), entered when a
+           * jump lands in it, as the M4A mixer's is; it resumes like the
+           * mixer. */
+          if (pc - game_hle_pc < game_hle_size)
+          {
+             u64 hr = game_hle_fn(pc, cycles_remaining,
+                                   (n_flag << 3) | (z_flag << 2) | (c_flag << 1) | v_flag);
+             if (hr >> 32)
+             {
+                u32 f = (u32)(hr >> 32);
+                cycles_remaining = (s32)(u32)hr;
+                n_flag = (f >> 4) & 1; z_flag = (f >> 3) & 1;
+                c_flag = (f >> 2) & 1; v_flag = (f >> 1) & 1;
+                pc = reg[REG_PC];
+                next_pc = 0xFFFFFFFFu;     /* the PC it stopped at is tested next */
+                goto m4a_resume;
+             }
           }
 #endif
           /* idle_loop_cond: GENERIC proves and skips the poll loop's passes
