@@ -93,6 +93,12 @@ attached to the release:
   (host `HOST_EXTRA_DEFS=-DGBA_PC_CHECK` checks it after every
   instruction). Device, Tony Hawk's Underground: -3.2% interpreter cycles,
   4,617 -> 4,926 pictures shown of 5,640.
+- Interpreter: ARM conditions by a 16-entry table with an AL fast path (no
+  16-way jump per instruction); stores to work RAM done by small functions
+  in ITCM (no call into `write_memory*` in AXI RAM); LDM/STM visit only the
+  listed registers; Thumb's idle-target compare uses a local copy. Device,
+  Tony Hawk's Underground: -8.4% interpreter cycles, 4,926 -> 5,200
+  pictures shown of 5,640, windows at a full 59.7 fps 15 -> 29 of 47.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial

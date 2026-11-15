@@ -943,6 +943,36 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 #define aligned_address_mask16 0xF0000001
 #define aligned_address_mask32 0xF0000003
 
+static __attribute__((noinline)) cpu_alert_type cpu_store8(u32 a, u32 v)
+{
+  if (((a >> 24) - 2) <= 1) {
+    *(u8 *)(memory_map_read[a >> 15] + (a & 0x7FFF)) = (u8)v;
+    gba_idle_sidefx++;
+    return CPU_ALERT_NONE;
+  }
+  return write_memory8(a, (u8)v);
+}
+
+static __attribute__((noinline)) cpu_alert_type cpu_store16(u32 a, u32 v)
+{
+  if (((a >> 24) - 2) <= 1) {
+    *(u16 *)(memory_map_read[a >> 15] + (a & 0x7FFF)) = (u16)v;
+    gba_idle_sidefx++;
+    return CPU_ALERT_NONE;
+  }
+  return write_memory16(a, (u16)v);
+}
+
+static __attribute__((noinline)) cpu_alert_type cpu_store32(u32 a, u32 v)
+{
+  if (((a >> 24) - 2) <= 1) {
+    *(u32 *)(memory_map_read[a >> 15] + (a & 0x7FFF)) = v;
+    gba_idle_sidefx++;
+    return CPU_ALERT_NONE;
+  }
+  return write_memory32(a, v);
+}
+
 #define fast_read_memory(size, type, addr, dest, readfn)                      \
 {                                                                             \
   u8 *map;                                                                    \
@@ -971,6 +1001,17 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
   }                                                                           \
 }                                                                             \
 
+/* Every store goes through cpu_store8/16/32 (below, in ITCM with the
+ * interpreter): a store to work RAM (EWRAM 0x02, IWRAM 0x03) is done there,
+ * exactly as write_memory##size would (the same bytes through the same page
+ * map, the idle skip's side-effect count), so most stores never leave ITCM
+ * for the write_memory functions in AXI RAM (a veneer, a long jump and a
+ * region switch each). Every other region goes to write_memory##size as
+ * before. GCC: one small function per size, not the test inlined at every
+ * store site -- that grew execute_arm by ~3 KB and overflowed ITCM. */
+#define work_ram_store(size, _a, v)                                           \
+  cpu_alert |= cpu_store##size(_a, v)                                         \
+
 #define fast_write_memory(size, type, address, value)                         \
 {                                                                             \
   u32 _address = (address) & ~(aligned_address_mask##size & 0x03);            \
@@ -981,7 +1022,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
     STATS_MEMORY_ACCESS(write, type, region);                                 \
   }                                                                           \
                                                                               \
-  cpu_alert |= write_memory##size(_address, value);                           \
+  work_ram_store(size, _address, value);                                      \
 }                                                                             \
 
 #define load_aligned32(address, dest)                                         \
@@ -1015,7 +1056,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
     cycles_remaining -= ws_cyc_seq[region][1];                                \
     STATS_MEMORY_ACCESS(write, u32, region);                                  \
   }                                                                           \
-  cpu_alert |= write_memory32(_address, value);                               \
+  work_ram_store(32, _address, value);                                        \
 }                                                                             \
 
 #define load_memory_u8(address, dest)                                         \
@@ -1127,15 +1168,14 @@ inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles_remain
 
   reg[REG_PC] += 4;  // Advance PC (a function: no local pc here)
 
-  for (u32 i = 0; i < 16; i++)  {
-    if ((reglist >> i) & 0x01) {
-      if (mode == AccLoad) {
-        load_aligned32(address, reg[i]);
-      } else {
-        store_aligned32(address, (i == REG_PC) ? reg[REG_PC] + 4 : reg[i]);
-      }
-      address += 4;
+  for (u32 l = reglist; l; l &= l - 1) {     /* the set bits, lowest first */
+    u32 i = __builtin_ctz(l);
+    if (mode == AccLoad) {
+      load_aligned32(address, reg[i]);
+    } else {
+      store_aligned32(address, (i == REG_PC) ? reg[REG_PC] + 4 : reg[i]);
     }
+    address += 4;
   }
 
   if (writeback && !writeback_first)
@@ -1176,22 +1216,18 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   reg[REG_PC] += 2;  // Advance PC (a function: no local pc here)
 
   if (mode == AccLoad) {
-    for (u32 i = 0; i < 8; i++)  {
-      if ((reglist >> i) & 0x01) {
-        load_aligned32(address, reg[i]);
-        address += 4;
-      }
+    for (u32 l = reglist & 0xFF; l; l &= l - 1) {
+      load_aligned32(address, reg[__builtin_ctz(l)]);
+      address += 4;
     }
     if (reglist & (1 << REG_PC)) {
       load_aligned32(address, reg[REG_PC]);
       reg[REG_PC] &= ~0x01;
     }
   } else {
-    for (u32 i = 0; i < 8; i++)  {
-      if ((reglist >> i) & 0x01) {
-        store_aligned32(address, reg[i]);
-        address += 4;
-      }
+    for (u32 l = reglist & 0xFF; l; l &= l - 1) {
+      store_aligned32(address, reg[__builtin_ctz(l)]);
+      address += 4;
     }
     if (reglist & (1 << REG_LR)) {
       store_aligned32(address, reg[REG_LR]);
@@ -1588,6 +1624,12 @@ u8 vram[1024 * 96];
 u16 io_registers[512];
 #endif
 
+/* bit nzcv (n<<3 | z<<2 | c<<1 | v) of arm_cond_pass[cond]: the ARM condition
+ * passes. EQ NE CS CC MI PL VS VC HI LS GE LT GT LE AL NV */
+static const u16 arm_cond_pass[16] = {
+  0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555, 0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
+};
+
 void execute_arm(u32 cycles)
 {
   u32 opcode;
@@ -1600,6 +1642,10 @@ void execute_arm(u32 cycles)
   u32 update_ret;
   cpu_alert_type cpu_alert;
   u32 pc = reg[REG_PC];     /* a copy of reg[REG_PC] (arm_pc_offset) */
+  /* a copy of idle_loop_target_pc: inside the loops only gba_idle_head
+   * changes it (a disarm); events and the menu change it outside them, so it
+   * is reloaded at every loop entry and after gba_idle_head */
+  u32 idle_pc = idle_loop_target_pc;
   u32 next_pc = 0;          /* ARM: the PC after the instruction unless it jumps */
   u32 arm_step = 4;         /* 4; 1 tests the special PCs after every instruction */
 #ifdef M4A_HLE_VERIFY
@@ -1665,6 +1711,7 @@ cpu_loop_top:
     {
 arm_loop:
        pc = reg[REG_PC];        /* an entry (the loop's own back edge skips this) */
+       idle_pc = idle_loop_target_pc;
 arm_loop_pc:
 
        /* LAZY FLAGS: n/z/c/v live in locals and reach reg[REG_CPSR] only
@@ -1727,9 +1774,11 @@ arm_loop_pc:
            * (gba_idle.c); CHEAT is about to execute the cheat hook; the
            * per-game tables' ALWAYS / WHEN_NE burn the slice (WHEN_NE only
            * while the compare says it will loop, see cpu.h). */
-          if (pc == idle_loop_target_pc) {
-             if (idle_loop_cond == IDLE_COND_GENERIC)
+          if (pc == idle_pc) {
+             if (idle_loop_cond == IDLE_COND_GENERIC) {
                 cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
+                idle_pc = idle_loop_target_pc;
+             }
              else if (idle_loop_cond == IDLE_COND_CHEAT)
                 process_cheats();
              else if (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0) {
@@ -1778,96 +1827,15 @@ arm_loop_pc:
 #endif
        condition = opcode >> 28;
 
-       switch(condition)
+       /* The condition: AL (most ARM code) goes straight on; any other
+        * looks its NZCV combination up in arm_cond_pass (the same results as
+        * gpSP's 16-way switch, which cost an indirect jump per instruction;
+        * 0xF stays "never"). */
+       if (__builtin_expect(condition != 0xE, 0))
        {
-          case 0x0:
-             /* EQ */
-             if(!z_flag)
-                arm_next_instruction();
-             break;
-          case 0x1:
-             /* NE      */
-             if(z_flag)
-                arm_next_instruction();
-             break;
-          case 0x2:
-             /* CS       */
-             if(!c_flag)
-                arm_next_instruction();
-             break;
-          case 0x3:
-             /* CC       */
-             if(c_flag)
-                arm_next_instruction();
-             break;
-          case 0x4:
-             /* MI       */
-             if(!n_flag)
-                arm_next_instruction();
-             break;
-
-          case 0x5:
-             /* PL       */
-             if(n_flag)
-                arm_next_instruction();
-             break;
-
-          case 0x6:
-             /* VS       */
-             if(!v_flag)
-                arm_next_instruction();
-             break;
-
-          case 0x7:
-             /* VC       */
-             if(v_flag)
-                arm_next_instruction();
-             break;
-
-          case 0x8:
-             /* HI       */
-             if((c_flag == 0) | z_flag)
-                arm_next_instruction();
-             break;
-
-          case 0x9:
-             /* LS       */
-             if(c_flag & (z_flag ^ 1))
-                arm_next_instruction();
-             break;
-
-          case 0xA:
-             /* GE       */
-             if(n_flag != v_flag)
-                arm_next_instruction();
-             break;
-
-          case 0xB:
-             /* LT       */
-             if(n_flag == v_flag)
-                arm_next_instruction();
-             break;
-
-          case 0xC:
-             /* GT       */
-             if(z_flag | (n_flag != v_flag))
-                arm_next_instruction();
-             break;
-
-          case 0xD:
-             /* LE       */
-             if((z_flag == 0) & (n_flag == v_flag))
-                arm_next_instruction();
-             break;
-
-          case 0xE:
-             /* AL       */
-             break;
-
-          case 0xF:
-             /* Reserved - treat as "never" */
+          u32 nzcv = (n_flag << 3) | (z_flag << 2) | (c_flag << 1) | v_flag;
+          if (!((arm_cond_pass[condition] >> nzcv) & 1))
              arm_next_instruction();
-             break;
        }
 
        #ifdef TRACE_INSTRUCTIONS
@@ -3387,6 +3355,7 @@ m4a_resume:
     {
 thumb_loop:
        pc = reg[REG_PC];        /* an entry (the loop's own back edge skips this) */
+       idle_pc = idle_loop_target_pc;
 thumb_loop_pc:
 
 #ifdef M4A_COUNT_INSNS
@@ -3876,9 +3845,11 @@ thumb_loop_pc:
 #endif
        /* Same conditional-skip semantic as the ARM side above (after every
         * instruction: one compare, and no M4A hook in Thumb). */
-       if (pc == idle_loop_target_pc) {
-          if (idle_loop_cond == IDLE_COND_GENERIC)
+       if (pc == idle_pc) {
+          if (idle_loop_cond == IDLE_COND_GENERIC) {
              cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
+             idle_pc = idle_loop_target_pc;
+          }
           else if (idle_loop_cond == IDLE_COND_CHEAT)
              process_cheats();     /* about to execute the cheat hook */
           else if (cycles_remaining > 0 &&
