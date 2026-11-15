@@ -183,7 +183,15 @@ SECTIONS
     . = ALIGN(32) + 28;
     build/m4a_gpsp.o (.text*)
     build/video.o (.text.update_scanline)
-    *(.gba_itcm_text*)       /* the scaler (gba_scale.c), PROF's PC sampler (gba_prof.c) */
+    /* PROF's PC sampler (gba_prof.c), the idle-skip hooks (gba_idle.c), the
+     * scaler (gba_scale.c). The pass-head hook and the scaler keep their
+     * measured places mod 32 (run 37) whatever the event hook's size. */
+    build/gba_prof.o (.gba_itcm_text*)
+    build/gba_idle.o (.gba_itcm_text)
+    . = ALIGN(. - 12, 32) + 12;
+    build/gba_idle.o (.gba_itcm_text.idle_head)
+    . = ALIGN(. - 16, 32) + 16;
+    *(.gba_itcm_text*)
     /* The drawing code below at its measured place mod 32 (24: runs 20-27,
      * with the PC sampler above it), with or without the sampler. */
     . = ALIGN(. - 24, 32) + 24;

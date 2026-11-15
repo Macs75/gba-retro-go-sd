@@ -70,6 +70,8 @@ uint32_t gba_idle_heads;      /* arrivals at the armed head (REC/icount) */
 
 static int enabled, bug, log_on;
 static uint32_t seq, last_pc = 0xFFFFFFFFu, head = 0xFFFFFFFFu, tail;
+/* the armed loop's lowest address (a path loop can start below its head) */
+static uint32_t lo __attribute__((section(".gba_tail_bss")));
 static int last_thumb, head_thumb;
 static uint32_t black[NBLACK], black_n, black_hits;
 static uint32_t black_head[NHEADS], black_head_n;
@@ -125,8 +127,11 @@ void gba_idle_enable(void)
  * remembered by its exact head instead. */
 #ifndef HOST_BUILD
 #define GBA_IDLE_HOT __attribute__((section(".gba_itcm_text")))
+/* its own section: ld/gba_core.ld keeps it at one place mod 32 */
+#define GBA_IDLE_HEAD_HOT __attribute__((section(".gba_itcm_text.idle_head")))
 #else
 #define GBA_IDLE_HOT
+#define GBA_IDLE_HEAD_HOT
 #endif
 
 GBA_IDLE_HOT static int blacklisted(uint32_t pc)
@@ -266,6 +271,76 @@ static int find_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *t)
     return 1;
 }
 
+/* A poll loop that jumps over code or data (its literal pool between a
+ * branch and its target: Super Mario Advance's VBlank wait,
+ * b 0x8001cde ... beq 0x8001cfc; b 0x8001cbc, 56% of its instructions) is
+ * not a straight run back to a backward branch: follow the code as it runs,
+ * from the PC along each branch (both ways at a conditional one), back to
+ * the PC within MAX_BODY instructions, every instruction on that path
+ * allowed. The probe (gba_idle_head) still proves each skip. *h = the first
+ * branch target on the path (reached by a jump once a pass: the probe's
+ * PC), *l..*t the path's extent. */
+#define IDLE_TAIL_BSS __attribute__((section(".gba_tail_bss")))
+static uint32_t path_pc[MAX_BODY] IDLE_TAIL_BSS, path_tgt[MAX_BODY] IDLE_TAIL_BSS, path_steps IDLE_TAIL_BSS;
+static uint8_t path_taken[MAX_BODY] IDLE_TAIL_BSS;
+
+static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
+{
+    if (depth && a == pc)
+        return (int)(path_steps = depth), 1;
+    if (depth >= MAX_BODY)
+        return 0;
+    const uint8_t *p = code_at(a);
+    if (!p)
+        return 0;
+    uint32_t op = thumb ? (uint32_t)(p[0] | p[1] << 8)
+                        : (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24);
+    uint32_t tgt, step = thumb ? 2u : 4u;
+    if (!(thumb ? thumb_ok(a, (uint16_t)op, &tgt) : arm_ok(a, op, &tgt)))
+        return 0;
+    path_pc[depth] = a;
+    path_tgt[depth] = tgt;
+    path_taken[depth] = 0;
+    if (tgt == 0xFFFFFFFFu)
+        return walk(a + step, pc, thumb, depth + 1);
+    int always = thumb ? (op >= 0xE000 && op < 0xE800) : (op >> 28) == 0xE;
+    path_taken[depth] = 1;
+    if (walk(tgt, pc, thumb, depth + 1))
+        return 1;
+    if (always)
+        return 0;
+    path_taken[depth] = 0;
+    return walk(a + step, pc, thumb, depth + 1);
+}
+
+/* noinline: it runs only when a loop is armed; inlined, it grew the ITCM
+ * hook (gba_idle_event) and moved the code after it */
+__attribute__((noinline)) static int find_poll_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *l, uint32_t *t)
+{
+    if (find_loop(pc, thumb, h, t)) {
+        *l = *h;
+        return 1;
+    }
+    if (!walk(pc, pc, thumb, 0))
+        return 0;
+    uint32_t i, first = MAX_BODY;
+    *l = 0xFFFFFFFFu;
+    *t = 0;
+    for (i = 0; i < path_steps; i++) {
+        if (path_pc[i] < *l) *l = path_pc[i];
+        if (path_pc[i] > *t) *t = path_pc[i];
+        if (path_taken[i] && first == MAX_BODY)
+            first = i;
+    }
+    if (first == MAX_BODY)
+        return 0;                          /* no jump: find_loop's shape */
+    *h = path_tgt[first];
+    if ((cheat_master_hook >= *l && cheat_master_hook <= *t) ||
+        (m4a_hook_pc && m4a_hook_pc >= *l && m4a_hook_pc <= *t))
+        return 0;                          /* hooks the interpreter must reach */
+    return 1;
+}
+
 /* gba_idle_event and gba_idle_head run at every event and at every pass's
  * head: in ITCM (they ran from the flash); the decoder stays in flash. */
 GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
@@ -278,17 +353,19 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
         return;
     last_pc = pc;
     last_thumb = thumb;
-    if (head != 0xFFFFFFFFu && thumb == head_thumb && pc >= head && pc <= tail)
+    if (head != 0xFFFFFFFFu && thumb == head_thumb && pc >= lo && pc <= tail)
         return;                            /* still in the armed loop */
     if (pc == 0xFFFFFFFFu || thumb != prev_thumb || pc - prev + NEAR > 2u * NEAR)
         return;                            /* not two events in one short loop */
     if (blacklisted(pc) && (++black_hits % RETRY))
         return;
-    if (!find_loop(pc, thumb, &h, &t) || head_rejected(h)) {
+    uint32_t l;
+    if (!find_poll_loop(pc, thumb, &h, &l, &t) || head_rejected(h)) {
         blacklist(pc);
         return;
     }
     head = h;
+    lo = l;
     tail = t;
     head_thumb = thumb;
     gba_idle_head_pc = h;
@@ -297,11 +374,11 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
     fails = 0;
     gba_idle_arms++;
     if (log_on)
-        printf("IDLE: armed %s loop %08lx-%08lx\n", thumb ? "Thumb" : "ARM",
-               (unsigned long)h, (unsigned long)t);
+        printf("IDLE: armed %s loop %08lx-%08lx head %08lx\n", thumb ? "Thumb" : "ARM",
+               (unsigned long)l, (unsigned long)t, (unsigned long)h);
 }
 
-GBA_IDLE_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint32_t c, uint32_t v)
+GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint32_t c, uint32_t v)
 {
     uint32_t flags = n | z << 1 | c << 2 | v << 3, mode = reg[16] & 0xFFu;
 #ifdef HOST_BUILD

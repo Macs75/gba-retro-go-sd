@@ -44,7 +44,11 @@ attached to the release:
   identical registers and flags). Exact: host replays with and without it
   log the same `REC/hash` lines in all 149 games of a 150-game set that run
   on the host. Kirby & The Amazing Mirror: 12-17% fewer instructions in its
-  heaviest stage-2 scenes.
+  heaviest stage-2 scenes. A wait loop that jumps over data (its literal
+  pool between a branch and its target) is followed along its branches:
+  Super Mario Advance's VBlank wait, which ran from the interpreter, is
+  skipped (device: ARM 4.0-4.6M -> 1.8-3.5M cycles a frame, every frame
+  shown; it dropped frames in 13 of 62 windows).
 
 - Host tools: `GBA_PCHIST=1` (PC histogram, `tools/gba_pchist.py`),
   `tools/gba_idle_census.sh` (poll loops across a ROM set),
