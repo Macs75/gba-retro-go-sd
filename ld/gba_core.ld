@@ -54,6 +54,13 @@ SECTIONS
     build/video.o (.text._Z20render_scanline_textItL8rendtype1*)
     build/video.o (.text._Z20render_scanline_textIjL8rendtype1*)
     build/video.o (.text._Z20render_scanline_textIjL8rendtype2*)
+    /* The hot RAM code from here on (sprites, the window/effects passes,
+     * then everything below) keeps one place mod 8 KB, the I-cache's set
+     * span, whatever the code in front of it: placement moved device cost by
+     * 5-10% in the measurements of 2026-11-15. render_object at 0x1d24 mod
+     * 8 KB, its measured placement (run 20); "." is section-relative here and
+     * the section starts at 0x2404b000 (0x1000 mod 8 KB), hence 0xd24. */
+    . = ALIGN(. - 0xd24, 0x2000) + 0xd24;
     build/video.o (.text._Z13render_object*)
     build/video.o (.text._ZL16render_w_effects*)
     build/video.o (.text._ZL9order_obj*)
@@ -115,7 +122,12 @@ SECTIONS
   _OVERLAY_GBA_BSS_START = __CORE_CODE_END__;
   _GBA_SENTINEL_PATCH_END = __CORE_CODE_END__;
 
-  .bss _OVERLAY_GBA_BSS_START (NOLOAD) :
+  /* .bss (the GBA memories: VRAM, the work RAMs, palette, OAM, I/O, reg[],
+   * the page map) keeps one position mod 4 KB, the D-cache's set span,
+   * whatever the code size: 0xbe0 is the measured placement (runs 13-20).
+   * The firmware zeroes from the code's end to __CORE_BSS_END__, the gap
+   * included. */
+  .bss ALIGN(_OVERLAY_GBA_BSS_START - 0xbe0, 4096) + 0xbe0 (NOLOAD) :
   {
     . = ALIGN(8);
     *(.bss*)
@@ -135,6 +147,13 @@ SECTIONS
     . = ALIGN(4);
     __CORE_ITCM_CODE_START__ = .;
     build/cpu.o (.text*)
+    /* The code after cpu.o keeps one place mod 32 whatever execute_arm's
+     * size: update_scanline at 20 mod 32 and the drawing code after it. Where
+     * it fell with each interpreter edit moved the drawing's device cost by
+     * up to +10/14% (2026-11-15: run 14, same code with this block 4 bytes off
+     * mod 8 relative to the fetch). The value is the measured-good placement
+     * (build 13), not derived: re-measure if this block's contents change. */
+    . = ALIGN(32) + 28;
     build/m4a_gpsp.o (.text*)
     build/video.o (.text.update_scanline)
     *(.gba_itcm_text*)       /* the scaler (gba_scale.c), PROF's PC sampler (gba_prof.c) */
@@ -152,7 +171,7 @@ SECTIONS
     /* Read-only tables the interpreter reads every instruction: the
      * threaded Thumb dispatch's label table (ITCM serves data reads too,
      * and RAM_EMU has no room). */
-    . = ALIGN(4);
+    . = ALIGN(32) + 16;      /* thumb_tbl at its measured place mod 32 */
     *(.gba_itcm_rodata*)
     . = ALIGN(4);
     __CORE_ITCM_CODE_END__ = .;
@@ -192,7 +211,11 @@ SECTIONS
 
   .rodata_gba :
   {
-    . = ALIGN(8);
+    /* The flash read-only data keeps one position mod 4 KB (the D-cache's set
+     * span) whatever the cold code in front of it: a 160-byte shift moved the
+     * drawing's device cost by 5-8% (2026-11-15: runs 10 vs 13). 0x5e0 is the
+     * measured-good offset, not derived; costs up to 4 KB of the 512 KB. */
+    . = ALIGN(4096) + 0x5e0;
     __rodata_gba_start__ = .;
     *(.rodata .rodata*)
     . = ALIGN(4);

@@ -127,6 +127,11 @@ attached to the release:
   minute of a 150-game set). Same pictures, frame by frame, in 10 games.
   Device: Tony Hawk's Underground drawing -20%, Kirby & The Amazing Mirror
   -13%; Tony's blended menu a further -12% per drawn frame.
+- Code and data placement is pinned where the device measured it best:
+  the code after the interpreter in ITCM (mod 32), the hot RAM drawing code
+  (mod 8 KB, the I-cache's set span), the flash read-only data and the GBA
+  memories (mod 4 KB, the D-cache's set span). Unpinned, unrelated edits
+  moved the drawing's cost by 5-14%.
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the
