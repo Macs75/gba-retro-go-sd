@@ -636,7 +636,7 @@ static const u8 gba_header_logo[156] = {
    (v_flag << 28) | (reg[REG_CPSR] & 0xFF)                                    \
 
 #define check_pc_region()                                                     \
-  new_pc_region = (reg[REG_PC] >> 15);                                        \
+  new_pc_region = (pc >> 15);                                                 \
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
     pc_region = new_pc_region;                                                \
@@ -648,8 +648,15 @@ static const u8 gba_header_logo[156] = {
   }                                                                           \
 
 
+/* The PC lives in reg[REG_PC] as always; execute_arm keeps a copy in the
+ * local pc (loaded at the top of the loop and after every instruction), so
+ * an offset is a store from a register, not a load-add-store of reg[15]
+ * (~8 loads of it per instruction were the largest fixed cost of the
+ * interpreter on the device). Used only where nothing else has written
+ * reg[REG_PC] since the fetch; the block transfers, which are functions,
+ * advance reg[REG_PC] themselves. */
 #define arm_pc_offset(val)                                                    \
-  reg[REG_PC] += val                                                          \
+  reg[REG_PC] = (pc += (val))                                                 \
 
 #define arm_next_instruction()                                                \
 {                                                                             \
@@ -658,7 +665,7 @@ static const u8 gba_header_logo[156] = {
 }                                                                             \
 
 #define thumb_pc_offset(val)                                                  \
-  reg[REG_PC] += val                                                          \
+  reg[REG_PC] = (pc += (val))                                                 \
 
 
 // It should be okay to still generate result flags, spsr will overwrite them.
@@ -822,8 +829,8 @@ static const u8 gba_header_logo[156] = {
   arm_decode_multiply();                                                      \
   dest = (reg[rm] * reg[rs]) add_op;                                          \
   arm_multiply_flags_##flags(dest);                                           \
-  reg[rd] = dest;                                                             \
   arm_pc_offset(4);                                                           \
+  reg[rd] = dest + ((rd == REG_PC) << 2);  /* rd = pc: as the old += 4 */     \
 }                                                                             \
 
 #define arm_multiply_long_addop(type)                                         \
@@ -840,9 +847,9 @@ static const u8 gba_header_logo[156] = {
   dest_lo = (u32)dest;                                                        \
   dest_hi = (u32)(dest >> 32);                                                \
   arm_multiply_long_flags_##flags(dest_lo, dest_hi);                          \
-  reg[rdlo] = dest_lo;                                                        \
-  reg[rdhi] = dest_hi;                                                        \
   arm_pc_offset(4);                                                           \
+  reg[rdlo] = dest_lo + ((rdlo == REG_PC) << 2);                              \
+  reg[rdhi] = dest_hi + ((rdhi == REG_PC) << 2);                              \
 }                                                                             \
 
 // Index by PRS fields (1 and 4 only!) and User-Privileged mode
@@ -926,7 +933,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
   }                                                                           \
                                                                               \
   if (                                                                        \
-     (((_address >> 24) == 0) && (reg[REG_PC] >= 0x4000)) ||  /* BIOS read */ \
+     (((_address >> 24) == 0) && (pc >= 0x4000)) ||  /* BIOS read */          \
      (_address & aligned_address_mask##size) ||      /* Unaligned access */   \
      !(map = memory_map_read[_address >> 15])        /* Unmapped memory */    \
   )                                                                           \
@@ -1084,7 +1091,7 @@ inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles_remain
   if (writeback && writeback_first)
     reg[rn] = endaddr;
 
-  arm_pc_offset(4);  // Advance PC
+  reg[REG_PC] += 4;  // Advance PC (a function: no local pc here)
 
   for (u32 i = 0; i < 16; i++)  {
     if ((reglist >> i) & 0x01) {
@@ -1132,7 +1139,7 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   if (writeback_first)
     reg[rn] = endaddr;
 
-  thumb_pc_offset(2);  // Advance PC
+  reg[REG_PC] += 2;  // Advance PC (a function: no local pc here)
 
   if (mode == AccLoad) {
     for (u32 i = 0; i < 8; i++)  {
@@ -1169,8 +1176,8 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   u32 temp;                                                                   \
   load_memory_##type(reg[rn], temp);                                          \
   store_memory_##type(reg[rn], reg[rm]);                                      \
-  reg[rd] = temp;                                                             \
   arm_pc_offset(4);                                                           \
+  reg[rd] = temp + ((rd == REG_PC) << 2);                                     \
 }                                                                             \
 
 // Types: add_sub, add_sub_imm, alu_op, imm
@@ -1417,7 +1424,7 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   {                                                                           \
     thumb_pc_offset(2);                                                       \
   }                                                                           \
-  cycles_remaining -= ws_cyc_nseq[reg[REG_PC] >> 24][0];                      \
+  cycles_remaining -= ws_cyc_nseq[pc >> 24][0];                               \
 }                                                                             \
 
 // When a mode change occurs from non-FIQ to non-FIQ retire the current
@@ -1558,6 +1565,7 @@ void execute_arm(u32 cycles)
   s32 cycles_remaining;
   u32 update_ret;
   cpu_alert_type cpu_alert;
+  u32 pc = reg[REG_PC];     /* a copy of reg[REG_PC] (arm_pc_offset) */
   u32 next_pc = 0;          /* ARM: the PC after the instruction unless it jumps */
   u32 arm_step = 4;         /* 4; 1 tests the special PCs after every instruction */
 #ifdef M4A_HLE_VERIFY
@@ -1636,7 +1644,8 @@ arm_loop:
         * merged the loop's tail behind three taken branches and a spill per
         * instruction (+10% device time in the interpreter, Tony Hawk):
         * re-check the disassembly if this moves. */
-       if (__builtin_expect(reg[REG_PC] != next_pc, 0))
+       pc = reg[REG_PC];
+       if (__builtin_expect(pc != next_pc, 0))
        {
 #if defined(GBA_M4A_HLE) && !defined(M4A_HLE_VERIFY)
           /* M4A's software mixer, run natively instead of interpreted.
@@ -1652,7 +1661,7 @@ arm_loop:
            * Resuming at m4a_resume, not skip_instruction, is deliberate: the
            * block's last instruction has already paid its own fetch, and
            * skip_instruction would charge it a second time. */
-          if (reg[REG_PC] == m4a_hook_pc)
+          if (pc == m4a_hook_pc)
           {
              s32 m4a_cycles = cycles_remaining;
              collapse_flags();   /* the CPSR as the block's first instruction saw it */
@@ -1683,7 +1692,7 @@ arm_loop:
            * (gba_idle.c); CHEAT is about to execute the cheat hook; the
            * per-game tables' ALWAYS / WHEN_NE burn the slice (WHEN_NE only
            * while the compare says it will loop, see cpu.h). */
-          if (reg[REG_PC] == idle_loop_target_pc) {
+          if (pc == idle_loop_target_pc) {
              if (idle_loop_cond == IDLE_COND_GENERIC)
                 cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
              else if (idle_loop_cond == IDLE_COND_CHEAT)
@@ -1722,13 +1731,15 @@ arm_loop:
 #endif
        using_instruction(arm);
        check_pc_region();
-       if (__builtin_expect(reg[REG_PC] & 0x03, 0))   /* stored only when misaligned */
-          reg[REG_PC] &= ~0x03;
-       next_pc = reg[REG_PC] + arm_step;  /* where the PC goes unless there is a jump */
-       opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
+       if (__builtin_expect(pc & 0x03, 0)) {   /* stored only when misaligned */
+          pc &= ~0x03;
+          reg[REG_PC] = pc;
+       }
+       next_pc = pc + arm_step;  /* where the PC goes unless there is a jump */
+       opcode = readaddress32(pc_address_block, (pc & 0x7FFF));
 #ifdef GBA_PCHIST
        if (gba_pchist_on > 0)
-          gba_pchist_hit(reg[REG_PC], 0);   /* host: tools/gba_pchist.py */
+          gba_pchist_hit(pc, 0);   /* host: tools/gba_pchist.py */
 #endif
        condition = opcode >> 28;
 
@@ -2309,7 +2320,7 @@ arm_loop:
                    {
                       reg[REG_PC] = src;
                    }
-                   cycles_remaining -= ws_cyc_nseq[reg[REG_PC] >> 24][1];
+                   cycles_remaining -= ws_cyc_nseq[src >> 24][1];
                 }
                 else
                 {
@@ -3227,8 +3238,8 @@ arm_loop:
              {
                 /* B offset */
                 arm_decode_branch();
-                reg[REG_PC] += offset + 8;
-                cycles_remaining -= ws_cyc_nseq[reg[REG_PC] >> 24][1];
+                arm_pc_offset(offset + 8);
+                cycles_remaining -= ws_cyc_nseq[pc >> 24][1];
                 break;
              }
 
@@ -3236,9 +3247,9 @@ arm_loop:
              {
                 /* BL offset */
                 arm_decode_branch();
-                reg[REG_LR] = reg[REG_PC] + 4;
-                reg[REG_PC] += offset + 8;
-                cycles_remaining -= ws_cyc_nseq[reg[REG_PC] >> 24][1];
+                reg[REG_LR] = pc + 4;
+                arm_pc_offset(offset + 8);
+                cycles_remaining -= ws_cyc_nseq[pc >> 24][1];
                 break;
              }
 
@@ -3273,7 +3284,8 @@ arm_loop:
 skip_instruction:
 
        /* End of Execute ARM instruction */
-       cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][1];
+       pc = reg[REG_PC];        /* the new PC (a jump wrote it directly) */
+       cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][1];
 
 #ifdef M4A_HLE_VERIFY
        if (m4a_in_block)
@@ -3345,13 +3357,16 @@ thumb_loop:
        /* Execute THUMB instruction */
 
        using_instruction(thumb);
+       pc = reg[REG_PC];
        check_pc_region();
-       if (__builtin_expect(reg[REG_PC] & 0x01, 0))   /* stored only when odd */
-          reg[REG_PC] &= ~0x01;
-       opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
+       if (__builtin_expect(pc & 0x01, 0)) {   /* stored only when odd */
+          pc &= ~0x01;
+          reg[REG_PC] = pc;
+       }
+       opcode = readaddress16(pc_address_block, (pc & 0x7FFF));
 #ifdef GBA_PCHIST
        if (gba_pchist_on > 0)
-          gba_pchist_hit(reg[REG_PC], 1);
+          gba_pchist_hit(pc, 1);
 #endif
 
        #ifdef TRACE_INSTRUCTIONS
@@ -3568,7 +3583,7 @@ thumb_loop:
 
           case 0x48 ... 0x4F:
              /* LDR r0..7, [pc + imm] */
-             thumb_access_memory(load, imm, ((reg[REG_PC] - 2) & ~2) + (imm * 4) + 4, reg[(opcode >> 8) & 7], u32);
+             thumb_access_memory(load, imm, ((pc - 2) & ~2) + (imm * 4) + 4, reg[(opcode >> 8) & 7], u32);
              break;
 
           case 0x50:
@@ -3661,7 +3676,7 @@ thumb_loop:
 
           case 0xA0 ... 0xA7:
              /* ADD r0..7, pc, +imm */
-             thumb_add_noflags(imm, ((opcode >> 8) & 7), (reg[REG_PC] & ~2) + 4, (imm * 4));
+             thumb_add_noflags(imm, ((opcode >> 8) & 7), (pc & ~2) + 4, (imm * 4));
              break;
 
           case 0xA8 ... 0xAF:
@@ -3785,8 +3800,8 @@ thumb_loop:
                 /* B label */
                 thumb_decode_branch();
                 s32 br_offset = ((s32)(offset << 21) >> 20) + 4;
-                reg[REG_PC] += br_offset;
-                cycles_remaining -= ws_cyc_nseq[reg[REG_PC] >> 24][0];
+                thumb_pc_offset(br_offset);
+                cycles_remaining -= ws_cyc_nseq[pc >> 24][0];
                 break;
              }
 
@@ -3794,7 +3809,7 @@ thumb_loop:
              {
                 /* (low word) BL label */
                 thumb_decode_branch();
-                reg[REG_LR] = reg[REG_PC] + 4 + ((s32)(offset << 21) >> 9);
+                reg[REG_LR] = pc + 4 + ((s32)(offset << 21) >> 9);
                 thumb_pc_offset(2);
                 break;
              }
@@ -3803,7 +3818,7 @@ thumb_loop:
              {
                 /* (high word) BL label */
                 thumb_decode_branch();
-                u32 newlr = (reg[REG_PC] + 2) | 0x01;
+                u32 newlr = (pc + 2) | 0x01;
                 u32 newpc = reg[REG_LR] + (offset * 2);
                 reg[REG_LR] = newlr;
                 reg[REG_PC] = newpc;
@@ -3813,14 +3828,15 @@ thumb_loop:
        }
 
        /* End of Execute THUMB instruction */
-       cycles_remaining -= ws_cyc_seq[(reg[REG_PC] >> 24) & 0xF][0];
+       pc = reg[REG_PC];        /* the new PC (a jump wrote it directly) */
+       cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][0];
 
 #ifdef GBA_ICOUNT
        gba_icount++;
 #endif
        /* Same conditional-skip semantic as the ARM side above (after every
         * instruction: one compare, and no M4A hook in Thumb). */
-       if (reg[REG_PC] == idle_loop_target_pc) {
+       if (pc == idle_loop_target_pc) {
           if (idle_loop_cond == IDLE_COND_GENERIC)
              cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
           else if (idle_loop_cond == IDLE_COND_CHEAT)

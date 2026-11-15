@@ -86,6 +86,9 @@ attached to the release:
   mixer's entry, the cheat hook) are tested only after an ARM jump or on
   entering the ARM loop, not before every ARM instruction, and the PC is
   masked only when it is misaligned.
+- Interpreter: the PC is kept in a local copy. The handlers' PC offsets
+  are stores from it instead of load-add-store sequences on `reg[15]`, and
+  the fetch, region check and alignment read it instead of memory.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial
