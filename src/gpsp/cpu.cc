@@ -1777,7 +1777,8 @@ static const u16 arm_cond_pass[16] = {
  * next opcode and the jump to its handler; anything else goes the slow way
  * through thumb_loop_pc. Host debug builds that hook the fetch (PC
  * histogram, M4A instruction count) take the shared copy. */
-#if defined(GBA_PCHIST) || defined(M4A_COUNT_INSNS) || defined(TRACE_INSTRUCTIONS)
+#if defined(GBA_PCHIST) || defined(M4A_COUNT_INSNS) || defined(TRACE_INSTRUCTIONS) || \
+    defined(GBA_THUMB_OPHIST)
 #define THUMB_NEXT() goto thumb_post
 #else
 #ifdef GBA_ICOUNT
@@ -1799,6 +1800,37 @@ static const u16 arm_cond_pass[16] = {
     opcode = readaddress16(pc_address_block, (pc & 0x7FFF));                  \
     goto *thumb_tbl[opcode >> 8];                                             \
   }
+#endif
+
+#ifdef GBA_ARM_OPHIST
+/* host debug build (HOST_EXTRA_DEFS=-DGBA_ARM_OPHIST): executed ARM
+ * instructions per opcode group (bits 27-20), printed at exit
+ * (tools/gba_fetch_align.py) */
+static unsigned long long arm_ophist[256];
+static void arm_ophist_dump(void)
+{
+  unsigned long long t = 0;
+  for (int i = 0; i < 256; i++) t += arm_ophist[i];
+  for (int i = 0; i < 256; i++)
+    if (arm_ophist[i])
+      fprintf(stderr, "ARMOP %02x %llu %.5f\n", i, arm_ophist[i], (double)arm_ophist[i] / t);
+}
+static int arm_ophist_init = (atexit(arm_ophist_dump), 0);
+#endif
+
+#ifdef GBA_THUMB_OPHIST
+/* host debug build (HOST_EXTRA_DEFS=-DGBA_THUMB_OPHIST): executed Thumb
+ * instructions per opcode group (opcode >> 8), printed at exit */
+static unsigned long long thumb_ophist[256];
+static void thumb_ophist_dump(void)
+{
+  unsigned long long t = 0;
+  for (int i = 0; i < 256; i++) t += thumb_ophist[i];
+  for (int i = 0; i < 256; i++)
+    if (thumb_ophist[i])
+      fprintf(stderr, "THOP %02x %llu %.5f\n", i, thumb_ophist[i], (double)thumb_ophist[i] / t);
+}
+static int thumb_ophist_init = (atexit(thumb_ophist_dump), 0);
 #endif
 
 void execute_arm(u32 cycles)
@@ -2017,6 +2049,9 @@ arm_loop_pc:
        interp_trace_instruction(reg[REG_PC], 1);
        #endif
 
+#ifdef GBA_ARM_OPHIST
+       arm_ophist[(opcode >> 20) & 0xFF]++;   /* host: ARM instructions per opcode group */
+#endif
        switch((opcode >> 20) & 0xFF)
        {
           case 0x00:
@@ -3601,6 +3636,9 @@ thumb_loop_pc:
         &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76,
         &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77,
        };
+#ifdef GBA_THUMB_OPHIST
+       thumb_ophist[(opcode >> 8) & 0xFF]++;   /* host: Thumb instructions per opcode group */
+#endif
        goto *thumb_tbl[(opcode >> 8) & 0xFF];
        switch((opcode >> 8) & 0xFF)
        {

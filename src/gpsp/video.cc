@@ -567,10 +567,34 @@ static void render_scanline_text_mosaic(u32 layer,
   }
 }
 
+#ifdef GBA_RENDER_CENSUS
+/* Host-only (HOST_EXTRA_DEFS=-DGBA_RENDER_CENSUS): pixels drawn by each text
+ * renderer instance [32-bit buffer][rendtype][isbase], printed at exit, so a
+ * set of games shows which instances carry the drawing. */
+#include <stdio.h>
+#include <stdlib.h>
+static unsigned long long rc_pix[2][4][2];
+static bool rc_reg;   /* one dump, not one per instance */
+static void rc_dump(void)
+{
+  static const char *rn[4] = {"FULLCOLOR", "INDXCOLOR", "STCKCOLOR", "PIXCOPY"};
+  for (int d = 0; d < 2; d++)
+    for (int r = 0; r < 4; r++)
+      for (int b = 0; b < 2; b++)
+        if (rc_pix[d][r][b])
+          printf("RCENSUS text<%s,%s,%s> pix=%llu frames=%u\n", d ? "u32" : "u16", rn[r],
+                 b ? "base" : "over", rc_pix[d][r][b], (unsigned)frame_counter);
+}
+#endif
+
 template<typename stype, rendtype rdtype, bool isbase>
 static void render_scanline_text(u32 layer,
  u32 start, u32 end, void *scanline, const u16 * paltbl)
 {
+#ifdef GBA_RENDER_CENSUS
+  { if (!rc_reg) { rc_reg = true; atexit(rc_dump); }
+    rc_pix[sizeof(stype) == 4][rdtype & 3][isbase] += end - start; }
+#endif
   // Tile mode has 4 and 8 bpp modes.
   u32 bg_control = read_ioreg(REG_BGxCNT(layer));
   bool is8bpp = (read_ioreg(REG_BGxCNT(layer)) & 0x80);
@@ -2368,6 +2392,45 @@ static const u8 active_layers[] = {
   0,
 };
 
+#ifdef GBA_VIDEO_TRACE
+/* Host-only (HOST_EXTRA_DEFS=-DGBA_VIDEO_TRACE): which display setups the
+ * visible lines use, per 120 frames (the device PROF window), so a heavy
+ * window can be matched to what it draws. Key: DISPCNT, BLDCNT, and the
+ * enabled BGs' control registers. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+struct vt_ent { uint16_t disp, bld, bg[4]; uint32_t lines, objlines; };
+static vt_ent vt_tab[64];
+static u32 vt_n, vt_frame;
+static int vt_cmp(const void *a, const void *b)
+{ return (int)((const vt_ent *)b)->lines - (int)((const vt_ent *)a)->lines; }
+static void video_trace_line(u16 dispcnt, u32 vcount)
+{
+  if (vcount < 160) {
+    vt_ent k; memset(&k, 0, sizeof k);
+    k.disp = dispcnt; k.bld = read_ioreg(REG_BLDCNT);
+    for (int i = 0; i < 4; i++)
+      if (dispcnt & (0x100 << i)) k.bg[i] = read_ioreg(REG_BGxCNT(i));
+    u32 i;
+    for (i = 0; i < vt_n; i++)
+      if (!memcmp(&vt_tab[i], &k, 12)) break;
+    if (i == vt_n && vt_n < 64) vt_tab[vt_n++] = k;
+    if (i < vt_n) { vt_tab[i].lines++; for (int p = 0; p < 4; p++) vt_tab[i].objlines += obj_priority_count[p][vcount]; }
+  }
+  if (vcount == 159 && ++vt_frame % 120 == 0) {
+    qsort(vt_tab, vt_n, sizeof *vt_tab, vt_cmp);
+    for (u32 i = 0; i < vt_n && i < 4; i++)
+      printf("VTR win=%u lines=%5u%% disp=%04x mode=%u bld=%04x bg=%04x,%04x,%04x,%04x objs/line=%u.%u\n",
+             vt_frame / 120 - 1, vt_tab[i].lines * 100 / (120 * 160), vt_tab[i].disp, vt_tab[i].disp & 7,
+             vt_tab[i].bld, vt_tab[i].bg[0], vt_tab[i].bg[1], vt_tab[i].bg[2], vt_tab[i].bg[3],
+             vt_tab[i].lines ? vt_tab[i].objlines / vt_tab[i].lines : 0, vt_tab[i].lines ? vt_tab[i].objlines * 10 / vt_tab[i].lines % 10 : 0);
+    vt_n = 0;
+  }
+}
+#endif
+
 void update_scanline(void)
 {
   u32 pitch = get_screen_pitch();
@@ -2379,6 +2442,9 @@ void update_scanline(void)
   if(skip_next_frame)
     return;
 
+#ifdef GBA_VIDEO_TRACE
+  video_trace_line(dispcnt, vcount);
+#endif
   GBA_PROF_START(GBA_PART_PPU);
   // If OAM has been modified since the last scanline has been updated then
   // reorder and reprofile the OBJ lists.
