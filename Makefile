@@ -185,7 +185,12 @@ $(BUILD_DIR)/gba_memory.o:       OPT := -O3
 # shared dispatch and copies it back only when it is at most
 # max-goto-duplication-insns long (8): the tail is ~20, so raise the limit or
 # every handler jumps to a single shared dispatch again.
-$(BUILD_DIR)/cpu.o:              OPT := -O3 --param max-goto-duplication-insns=40 -fno-crossjumping -fno-tree-tail-merge
+# GCC: -fno-tree-pre -fira-region=one: execute_arm's register allocation
+# flipped with unrelated edits (reg[]'s base to a high register: every reg[]
+# access 32-bit, +1.4-2.4 KB, ITCM overflowed); with these two the function
+# is ~4 KB smaller and reg[] stays in a low register. Re-check the size and
+# the base of `str rX, [rY, #60]` (the PC store) if cpu.cc changes.
+$(BUILD_DIR)/cpu.o:              OPT := -O3 --param max-goto-duplication-insns=40 -fno-crossjumping -fno-tree-tail-merge -fno-tree-pre -fira-region=one
 $(BUILD_DIR)/video.o:            OPT := -O2
 $(BUILD_DIR)/sound.o:            OPT := -O2
 $(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2

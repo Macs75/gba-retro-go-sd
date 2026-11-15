@@ -1008,7 +1008,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 #define aligned_address_mask32 0xF0000003
 
 /* An alert (a halt, an interrupt) raised by an instruction is checked
- * once it ends. Thumb's per-instruction tail does not test it: raising one
+ * once it ends. The per-instruction tails (ARM and Thumb) do not test it: raising one
  * also subtracts ALERT_BIAS from the cycle count, so the tail's own
  * "cycles left?" test catches it, and alert: adds the bias back -- the same
  * instruction, the same cycle count. Every alert raised in execute_arm goes
@@ -1340,6 +1340,71 @@ static inline __attribute__((always_inline)) cpu_alert_type exec_thumb_block_mem
   return cpu_alert;
 }
 
+/* Block transfers that stay in one 32 KB page of a mapped region (loads)
+ * or of work RAM (stores) -- the stack, nearly always: the page looked up
+ * once, the cycles charged once (the per-access sum: one region), the
+ * registers copied directly, no alert possible. Everything else (I/O, VRAM,
+ * a page crossing, unmapped memory, the S bit) takes the per-register body,
+ * out of line. The same memory, registers and cycles either way. */
+static inline __attribute__((always_inline)) u8 *blk_fast_ptr(
+    u32 address, u32 numops, AccMode mode) {
+  u32 last = address + 4 * numops - 4;
+  if (address >= 0x10000000 || (address >> 15) != (last >> 15))
+    return NULL;
+  if (mode == AccStore && ((address >> 24) - 2) > 1)
+    return NULL;
+  u8 *map = memory_map_read[address >> 15];
+  return map ? map + (address & 0x7FFF) : NULL;
+}
+
+static inline __attribute__((always_inline)) u32 blk_start(
+    u32 base, u32 endaddr, AddrMode addr_mode) {
+  u32 address = (addr_mode == AddrPreInc)  ? base + 4 :
+                (addr_mode == AddrPostInc) ? base :
+                (addr_mode == AddrPreDec)  ? endaddr : endaddr + 4;
+  return address & ~3U;
+}
+
+/* the fast forms; thumb: the low registers plus PC (load) or LR (store) */
+static inline __attribute__((always_inline)) void exec_block_mem_fast(
+    u32 rn, u32 reglist, s32 &cycles_remaining, AccMode mode, bool writeback,
+    bool thumb, u32 numops, u32 endaddr, u32 address, u8 *p) {
+  bool wrbck_base = (1 << rn) & reglist;
+  bool base_first = (((1 << rn) - 1) & reglist) == 0;
+  bool writeback_first = (mode == AccLoad) || !(wrbck_base && base_first);
+
+  if (writeback && writeback_first)
+    reg[rn] = endaddr;
+  reg[REG_PC] += thumb ? 2 : 4;
+  cycles_remaining -= numops * ws_cyc_seq[address >> 24][1];
+
+  if (thumb) {
+    for (u32 l = reglist & 0xFF; l; l &= l - 1, p += 4) {
+      if (mode == AccLoad)
+        reg[__builtin_ctz(l)] = readaddress32(p, 0);
+      else
+        address32(p, 0) = reg[__builtin_ctz(l)];
+    }
+    if (mode == AccLoad && (reglist & (1 << REG_PC)))
+      reg[REG_PC] = readaddress32(p, 0) & ~0x01;
+    if (mode == AccStore && (reglist & (1 << REG_LR)))
+      address32(p, 0) = reg[REG_LR];
+  } else {
+    for (u32 l = reglist; l; l &= l - 1, p += 4) {
+      u32 i = __builtin_ctz(l);
+      if (mode == AccLoad)
+        reg[i] = readaddress32(p, 0);
+      else
+        address32(p, 0) = (i == REG_PC) ? reg[REG_PC] + 4 : reg[i];
+    }
+  }
+  if (mode == AccStore)
+    gba_idle_sidefx += numops;
+
+  if (writeback && !writeback_first)
+    reg[rn] = endaddr;
+}
+
 /* The cycle count goes in by value and comes back in the low word, the
  * alert in the high word (r0:r1): a reference would make execute_arm's
  * cycles_remaining addressable, kept in memory and stored after every
@@ -1360,16 +1425,44 @@ static inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles
      (mode == AccLoad  && addr_mode == AddrPostInc) ||
      (mode == AccStore && addr_mode == AddrPostInc) ||
      (mode == AccLoad  && !writeback && addr_mode == AddrPreDec));
-  if (common)
-    return exec_arm_block_mem_body(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+  if (common) {
+    u32 numops = bit_count[reglist >> 8] + bit_count[reglist & 0xFF];
+    s32 addr_off = (addr_mode == AddrPreInc || addr_mode == AddrPostInc) ? 4 : -4;
+    u32 endaddr = reg[rn] + addr_off * numops;
+    u32 address = blk_start(reg[rn], endaddr, addr_mode);
+    u8 *p = blk_fast_ptr(address, numops, mode);
+    if (p) {
+      exec_block_mem_fast(rn, reglist, cycles_remaining, mode, writeback, false,
+                          numops, endaddr, address, p);
+      return CPU_ALERT_NONE;
+    }
+  }
   u64 r = exec_arm_block_mem_rt(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
   cycles_remaining = (s32)(u32)r;
   return (cpu_alert_type)(r >> 32);
 }
 
+static __attribute__((noinline)) u64 exec_thumb_block_mem_rt(
+    u32 rn, u32 reglist, s32 cycles, AccMode mode, AddrMode addr_mode) {
+  cpu_alert_type a = exec_thumb_block_mem_body(rn, reglist, cycles, mode, addr_mode);
+  return (u32)cycles | ((u64)a << 32);
+}
+
 template<AccMode mode, AddrMode addr_mode>
 static inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_remaining) {
-  return exec_thumb_block_mem_body(rn, reglist, cycles_remaining, mode, addr_mode);
+  u32 numops = bit_count[reglist & 0xFF] + (bit_count[reglist >> 8] ? 1 : 0);
+  s32 addr_off = (addr_mode == AddrPreInc || addr_mode == AddrPostInc) ? 4 : -4;
+  u32 endaddr = reg[rn] + addr_off * numops;
+  u32 address = blk_start(reg[rn], endaddr, addr_mode);
+  u8 *p = blk_fast_ptr(address, numops, mode);
+  if (p) {
+    exec_block_mem_fast(rn, reglist, cycles_remaining, mode, true, true,
+                        numops, endaddr, address, p);
+    return CPU_ALERT_NONE;
+  }
+  u64 r = exec_thumb_block_mem_rt(rn, reglist, cycles_remaining, mode, addr_mode);
+  cycles_remaining = (s32)(u32)r;
+  return (cpu_alert_type)(r >> 32);
 }
 
 #define arm_swap(type)                                                        \
@@ -1832,6 +1925,289 @@ static void thumb_ophist_dump(void)
 }
 static int thumb_ophist_init = (atexit(thumb_ophist_dump), 0);
 #endif
+
+/* LDR/STR (ARM single data transfers, opcode bits 27-20 0x40-0x7F) out of
+ * execute_arm: the same macro bodies, called for the rare forms (ARM_SDT_COLD
+ * below: post-indexed down, the T forms, pre-indexed down with writeback...:
+ * none above 0.05% of any game's ARM instructions in a 150-game set), so
+ * their ~5 KB of inlined memory paths leave ITCM; in the flash, with the
+ * other cold code. The cycle count goes in by value and comes back in r0,
+ * the alert in r1 (as exec_arm_block_mem_rt); an alert has already biased
+ * the count here (CPU_ALERT_OR), so the caller only records it. The carry is
+ * read by the register-offset forms (RRX). */
+static __attribute__((noinline)) GBA_CPU_COLD u64 arm_sdt_cold(
+    u32 opcode, u32 pc, s32 cycles_remaining, u32 c_flag) {
+  cpu_alert_type cpu_alert = CPU_ALERT_NONE;
+  switch ((opcode >> 20) & 0xFF) {
+    case 0x40:
+      /* STR rd, [rn], -imm */
+      arm_access_memory(store, no_op, imm, u32, yes, - offset);
+      break;
+    case 0x41:
+      /* LDR rd, [rn], -imm */
+      arm_access_memory(load, no_op, imm, u32, yes, - offset);
+      break;
+    case 0x42:
+      /* STRT rd, [rn], -imm */
+      arm_access_memory(store, no_op, imm, u32, yes, - offset);
+      break;
+    case 0x43:
+      /* LDRT rd, [rn], -imm */
+      arm_access_memory(load, no_op, imm, u32, yes, - offset);
+      break;
+    case 0x44:
+      /* STRB rd, [rn], -imm */
+      arm_access_memory(store, no_op, imm, u8, yes, - offset);
+      break;
+    case 0x45:
+      /* LDRB rd, [rn], -imm */
+      arm_access_memory(load, no_op, imm, u8, yes, - offset);
+      break;
+    case 0x46:
+      /* STRBT rd, [rn], -imm */
+      arm_access_memory(store, no_op, imm, u8, yes, - offset);
+      break;
+    case 0x47:
+      /* LDRBT rd, [rn], -imm */
+      arm_access_memory(load, no_op, imm, u8, yes, - offset);
+      break;
+    case 0x48:
+      /* STR rd, [rn], +imm */
+      arm_access_memory(store, no_op, imm, u32, yes, + offset);
+      break;
+    case 0x49:
+      /* LDR rd, [rn], +imm */
+      arm_access_memory(load, no_op, imm, u32, yes, + offset);
+      break;
+    case 0x4A:
+      /* STRT rd, [rn], +imm */
+      arm_access_memory(store, no_op, imm, u32, yes, + offset);
+      break;
+    case 0x4B:
+      /* LDRT rd, [rn], +imm */
+      arm_access_memory(load, no_op, imm, u32, yes, + offset);
+      break;
+    case 0x4C:
+      /* STRB rd, [rn], +imm */
+      arm_access_memory(store, no_op, imm, u8, yes, + offset);
+      break;
+    case 0x4D:
+      /* LDRB rd, [rn], +imm */
+      arm_access_memory(load, no_op, imm, u8, yes, + offset);
+      break;
+    case 0x4E:
+      /* STRBT rd, [rn], +imm */
+      arm_access_memory(store, no_op, imm, u8, yes, + offset);
+      break;
+    case 0x4F:
+      /* LDRBT rd, [rn], +imm */
+      arm_access_memory(load, no_op, imm, u8, yes, + offset);
+      break;
+    case 0x50:
+      /* STR rd, [rn - imm] */
+      arm_access_memory(store, - offset, imm, u32, no, no_op);
+      break;
+    case 0x51:
+      /* LDR rd, [rn - imm] */
+      arm_access_memory(load, - offset, imm, u32, no, no_op);
+      break;
+    case 0x52:
+      /* STR rd, [rn - imm]! */
+      arm_access_memory(store, - offset, imm, u32, yes, no_op);
+      break;
+    case 0x53:
+      /* LDR rd, [rn - imm]! */
+      arm_access_memory(load, - offset, imm, u32, yes, no_op);
+      break;
+    case 0x54:
+      /* STRB rd, [rn - imm] */
+      arm_access_memory(store, - offset, imm, u8, no, no_op);
+      break;
+    case 0x55:
+      /* LDRB rd, [rn - imm] */
+      arm_access_memory(load, - offset, imm, u8, no, no_op);
+      break;
+    case 0x56:
+      /* STRB rd, [rn - imm]! */
+      arm_access_memory(store, - offset, imm, u8, yes, no_op);
+      break;
+    case 0x57:
+      /* LDRB rd, [rn - imm]! */
+      arm_access_memory(load, - offset, imm, u8, yes, no_op);
+      break;
+    case 0x58:
+      /* STR rd, [rn + imm] */
+      arm_access_memory(store, + offset, imm, u32, no, no_op);
+      break;
+    case 0x59:
+      /* LDR rd, [rn + imm] */
+      arm_access_memory(load, + offset, imm, u32, no, no_op);
+      break;
+    case 0x5A:
+      /* STR rd, [rn + imm]! */
+      arm_access_memory(store, + offset, imm, u32, yes, no_op);
+      break;
+    case 0x5B:
+      /* LDR rd, [rn + imm]! */
+      arm_access_memory(load, + offset, imm, u32, yes, no_op);
+      break;
+    case 0x5C:
+      /* STRB rd, [rn + imm] */
+      arm_access_memory(store, + offset, imm, u8, no, no_op);
+      break;
+    case 0x5D:
+      /* LDRB rd, [rn + imm] */
+      arm_access_memory(load, + offset, imm, u8, no, no_op);
+      break;
+    case 0x5E:
+      /* STRB rd, [rn + imm]! */
+      arm_access_memory(store, + offset, imm, u8, yes, no_op);
+      break;
+    case 0x5F:
+      /* LDRBT rd, [rn + imm]! */
+      arm_access_memory(load, + offset, imm, u8, yes, no_op);
+      break;
+    case 0x60:
+      /* STR rd, [rn], -reg_op */
+      arm_access_memory(store, no_op, reg, u32, yes, - reg_offset);
+      break;
+    case 0x61:
+      /* LDR rd, [rn], -reg_op */
+      arm_access_memory(load, no_op, reg, u32, yes, - reg_offset);
+      break;
+    case 0x62:
+      /* STRT rd, [rn], -reg_op */
+      arm_access_memory(store, no_op, reg, u32, yes, - reg_offset);
+      break;
+    case 0x63:
+      /* LDRT rd, [rn], -reg_op */
+      arm_access_memory(load, no_op, reg, u32, yes, - reg_offset);
+      break;
+    case 0x64:
+      /* STRB rd, [rn], -reg_op */
+      arm_access_memory(store, no_op, reg, u8, yes, - reg_offset);
+      break;
+    case 0x65:
+      /* LDRB rd, [rn], -reg_op */
+      arm_access_memory(load, no_op, reg, u8, yes, - reg_offset);
+      break;
+    case 0x66:
+      /* STRBT rd, [rn], -reg_op */
+      arm_access_memory(store, no_op, reg, u8, yes, - reg_offset);
+      break;
+    case 0x67:
+      /* LDRBT rd, [rn], -reg_op */
+      arm_access_memory(load, no_op, reg, u8, yes, - reg_offset);
+      break;
+    case 0x68:
+      /* STR rd, [rn], +reg_op */
+      arm_access_memory(store, no_op, reg, u32, yes, + reg_offset);
+      break;
+    case 0x69:
+      /* LDR rd, [rn], +reg_op */
+      arm_access_memory(load, no_op, reg, u32, yes, + reg_offset);
+      break;
+    case 0x6A:
+      /* STRT rd, [rn], +reg_op */
+      arm_access_memory(store, no_op, reg, u32, yes, + reg_offset);
+      break;
+    case 0x6B:
+      /* LDRT rd, [rn], +reg_op */
+      arm_access_memory(load, no_op, reg, u32, yes, + reg_offset);
+      break;
+    case 0x6C:
+      /* STRB rd, [rn], +reg_op */
+      arm_access_memory(store, no_op, reg, u8, yes, + reg_offset);
+      break;
+    case 0x6D:
+      /* LDRB rd, [rn], +reg_op */
+      arm_access_memory(load, no_op, reg, u8, yes, + reg_offset);
+      break;
+    case 0x6E:
+      /* STRBT rd, [rn], +reg_op */
+      arm_access_memory(store, no_op, reg, u8, yes, + reg_offset);
+      break;
+    case 0x6F:
+      /* LDRBT rd, [rn], +reg_op */
+      arm_access_memory(load, no_op, reg, u8, yes, + reg_offset);
+      break;
+    case 0x70:
+      /* STR rd, [rn - reg_op] */
+      arm_access_memory(store, - reg_offset, reg, u32, no, no_op);
+      break;
+    case 0x71:
+      /* LDR rd, [rn - reg_op] */
+      arm_access_memory(load, - reg_offset, reg, u32, no, no_op);
+      break;
+    case 0x72:
+      /* STR rd, [rn - reg_op]! */
+      arm_access_memory(store, - reg_offset, reg, u32, yes, no_op);
+      break;
+    case 0x73:
+      /* LDR rd, [rn - reg_op]! */
+      arm_access_memory(load, - reg_offset, reg, u32, yes, no_op);
+      break;
+    case 0x74:
+      /* STRB rd, [rn - reg_op] */
+      arm_access_memory(store, - reg_offset, reg, u8, no, no_op);
+      break;
+    case 0x75:
+      /* LDRB rd, [rn - reg_op] */
+      arm_access_memory(load, - reg_offset, reg, u8, no, no_op);
+      break;
+    case 0x76:
+      /* STRB rd, [rn - reg_op]! */
+      arm_access_memory(store, - reg_offset, reg, u8, yes, no_op);
+      break;
+    case 0x77:
+      /* LDRB rd, [rn - reg_op]! */
+      arm_access_memory(load, - reg_offset, reg, u8, yes, no_op);
+      break;
+    case 0x78:
+      /* STR rd, [rn + reg_op] */
+      arm_access_memory(store, + reg_offset, reg, u32, no, no_op);
+      break;
+    case 0x79:
+      /* LDR rd, [rn + reg_op] */
+      arm_access_memory(load, + reg_offset, reg, u32, no, no_op);
+      break;
+    case 0x7A:
+      /* STR rd, [rn + reg_op]! */
+      arm_access_memory(store, + reg_offset, reg, u32, yes, no_op);
+      break;
+    case 0x7B:
+      /* LDR rd, [rn + reg_op]! */
+      arm_access_memory(load, + reg_offset, reg, u32, yes, no_op);
+      break;
+    case 0x7C:
+      /* STRB rd, [rn + reg_op] */
+      arm_access_memory(store, + reg_offset, reg, u8, no, no_op);
+      break;
+    case 0x7D:
+      /* LDRB rd, [rn + reg_op] */
+      arm_access_memory(load, + reg_offset, reg, u8, no, no_op);
+      break;
+    case 0x7E:
+      /* STRB rd, [rn + reg_op]! */
+      arm_access_memory(store, + reg_offset, reg, u8, yes, no_op);
+      break;
+    case 0x7F:
+      /* LDRBT rd, [rn + reg_op]! */
+      arm_access_memory(load, + reg_offset, reg, u8, yes, no_op);
+      break;
+  }
+  return (u32)cycles_remaining | ((u64)cpu_alert << 32);
+}
+
+/* the forms sent to arm_sdt_cold; host builds with -DGBA_SDT_COLD_ALL send
+ * all 64 (the A/B then exercises this call on the common forms too) */
+#define ARM_SDT_COLD()                                                        \
+  {                                                                           \
+    u64 _r = arm_sdt_cold(opcode, pc, cycles_remaining, c_flag);              \
+    cycles_remaining = (s32)(u32)_r;                                          \
+    cpu_alert |= (cpu_alert_type)(_r >> 32);                                  \
+    pc = reg[REG_PC];                                                         \
+  }                                                                           \
 
 void execute_arm(u32 cycles)
 {
@@ -2977,324 +3353,240 @@ arm_loop_pc:
              arm_data_proc_logic_flags(~imm, imm);
              break;
 
-          case 0x40:
-             /* STR rd, [rn], -imm */
-             arm_access_memory(store, no_op, imm, u32, yes, - offset);
-             break;
-
-          case 0x41:
-             /* LDR rd, [rn], -imm */
-             arm_access_memory(load, no_op, imm, u32, yes, - offset);
-             break;
-
-          case 0x42:
-             /* STRT rd, [rn], -imm */
-             arm_access_memory(store, no_op, imm, u32, yes, - offset);
-             break;
-
-          case 0x43:
-             /* LDRT rd, [rn], -imm */
-             arm_access_memory(load, no_op, imm, u32, yes, - offset);
-             break;
-
           case 0x44:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn], -imm */
              arm_access_memory(store, no_op, imm, u8, yes, - offset);
              break;
-
-          case 0x45:
-             /* LDRB rd, [rn], -imm */
-             arm_access_memory(load, no_op, imm, u8, yes, - offset);
-             break;
-
-          case 0x46:
-             /* STRBT rd, [rn], -imm */
-             arm_access_memory(store, no_op, imm, u8, yes, - offset);
-             break;
-
-          case 0x47:
-             /* LDRBT rd, [rn], -imm */
-             arm_access_memory(load, no_op, imm, u8, yes, - offset);
-             break;
+#endif
 
           case 0x48:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn], +imm */
              arm_access_memory(store, no_op, imm, u32, yes, + offset);
              break;
+#endif
 
           case 0x49:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn], +imm */
              arm_access_memory(load, no_op, imm, u32, yes, + offset);
              break;
-
-          case 0x4A:
-             /* STRT rd, [rn], +imm */
-             arm_access_memory(store, no_op, imm, u32, yes, + offset);
-             break;
-
-          case 0x4B:
-             /* LDRT rd, [rn], +imm */
-             arm_access_memory(load, no_op, imm, u32, yes, + offset);
-             break;
+#endif
 
           case 0x4C:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn], +imm */
              arm_access_memory(store, no_op, imm, u8, yes, + offset);
              break;
+#endif
 
           case 0x4D:
+#ifndef GBA_SDT_COLD_ALL
              /* LDRB rd, [rn], +imm */
              arm_access_memory(load, no_op, imm, u8, yes, + offset);
              break;
-
-          case 0x4E:
-             /* STRBT rd, [rn], +imm */
-             arm_access_memory(store, no_op, imm, u8, yes, + offset);
-             break;
-
-          case 0x4F:
-             /* LDRBT rd, [rn], +imm */
-             arm_access_memory(load, no_op, imm, u8, yes, + offset);
-             break;
+#endif
 
           case 0x50:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn - imm] */
              arm_access_memory(store, - offset, imm, u32, no, no_op);
              break;
+#endif
 
           case 0x51:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn - imm] */
              arm_access_memory(load, - offset, imm, u32, no, no_op);
              break;
-
-          case 0x52:
-             /* STR rd, [rn - imm]! */
-             arm_access_memory(store, - offset, imm, u32, yes, no_op);
-             break;
-
-          case 0x53:
-             /* LDR rd, [rn - imm]! */
-             arm_access_memory(load, - offset, imm, u32, yes, no_op);
-             break;
+#endif
 
           case 0x54:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn - imm] */
              arm_access_memory(store, - offset, imm, u8, no, no_op);
              break;
+#endif
 
           case 0x55:
+#ifndef GBA_SDT_COLD_ALL
              /* LDRB rd, [rn - imm] */
              arm_access_memory(load, - offset, imm, u8, no, no_op);
              break;
-
-          case 0x56:
-             /* STRB rd, [rn - imm]! */
-             arm_access_memory(store, - offset, imm, u8, yes, no_op);
-             break;
-
-          case 0x57:
-             /* LDRB rd, [rn - imm]! */
-             arm_access_memory(load, - offset, imm, u8, yes, no_op);
-             break;
+#endif
 
           case 0x58:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn + imm] */
              arm_access_memory(store, + offset, imm, u32, no, no_op);
              break;
+#endif
 
           case 0x59:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn + imm] */
              arm_access_memory(load, + offset, imm, u32, no, no_op);
              break;
-
-          case 0x5A:
-             /* STR rd, [rn + imm]! */
-             arm_access_memory(store, + offset, imm, u32, yes, no_op);
-             break;
+#endif
 
           case 0x5B:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn + imm]! */
              arm_access_memory(load, + offset, imm, u32, yes, no_op);
              break;
+#endif
 
           case 0x5C:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn + imm] */
              arm_access_memory(store, + offset, imm, u8, no, no_op);
              break;
+#endif
 
           case 0x5D:
+#ifndef GBA_SDT_COLD_ALL
              /* LDRB rd, [rn + imm] */
              arm_access_memory(load, + offset, imm, u8, no, no_op);
              break;
+#endif
 
           case 0x5E:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn + imm]! */
              arm_access_memory(store, + offset, imm, u8, yes, no_op);
              break;
-
-          case 0x5F:
-             /* LDRBT rd, [rn + imm]! */
-             arm_access_memory(load, + offset, imm, u8, yes, no_op);
-             break;
-
-          case 0x60:
-             /* STR rd, [rn], -reg_op */
-             arm_access_memory(store, no_op, reg, u32, yes, - reg_offset);
-             break;
+#endif
 
           case 0x61:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn], -reg_op */
              arm_access_memory(load, no_op, reg, u32, yes, - reg_offset);
              break;
-
-          case 0x62:
-             /* STRT rd, [rn], -reg_op */
-             arm_access_memory(store, no_op, reg, u32, yes, - reg_offset);
-             break;
-
-          case 0x63:
-             /* LDRT rd, [rn], -reg_op */
-             arm_access_memory(load, no_op, reg, u32, yes, - reg_offset);
-             break;
+#endif
 
           case 0x64:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn], -reg_op */
              arm_access_memory(store, no_op, reg, u8, yes, - reg_offset);
              break;
-
-          case 0x65:
-             /* LDRB rd, [rn], -reg_op */
-             arm_access_memory(load, no_op, reg, u8, yes, - reg_offset);
-             break;
-
-          case 0x66:
-             /* STRBT rd, [rn], -reg_op */
-             arm_access_memory(store, no_op, reg, u8, yes, - reg_offset);
-             break;
-
-          case 0x67:
-             /* LDRBT rd, [rn], -reg_op */
-             arm_access_memory(load, no_op, reg, u8, yes, - reg_offset);
-             break;
+#endif
 
           case 0x68:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn], +reg_op */
              arm_access_memory(store, no_op, reg, u32, yes, + reg_offset);
              break;
-
-          case 0x69:
-             /* LDR rd, [rn], +reg_op */
-             arm_access_memory(load, no_op, reg, u32, yes, + reg_offset);
-             break;
-
-          case 0x6A:
-             /* STRT rd, [rn], +reg_op */
-             arm_access_memory(store, no_op, reg, u32, yes, + reg_offset);
-             break;
-
-          case 0x6B:
-             /* LDRT rd, [rn], +reg_op */
-             arm_access_memory(load, no_op, reg, u32, yes, + reg_offset);
-             break;
+#endif
 
           case 0x6C:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn], +reg_op */
              arm_access_memory(store, no_op, reg, u8, yes, + reg_offset);
              break;
+#endif
 
           case 0x6D:
+#ifndef GBA_SDT_COLD_ALL
              /* LDRB rd, [rn], +reg_op */
              arm_access_memory(load, no_op, reg, u8, yes, + reg_offset);
              break;
-
-          case 0x6E:
-             /* STRBT rd, [rn], +reg_op */
-             arm_access_memory(store, no_op, reg, u8, yes, + reg_offset);
-             break;
-
-          case 0x6F:
-             /* LDRBT rd, [rn], +reg_op */
-             arm_access_memory(load, no_op, reg, u8, yes, + reg_offset);
-             break;
+#endif
 
           case 0x70:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn - reg_op] */
              arm_access_memory(store, - reg_offset, reg, u32, no, no_op);
              break;
+#endif
 
           case 0x71:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn - reg_op] */
              arm_access_memory(load, - reg_offset, reg, u32, no, no_op);
              break;
+#endif
 
           case 0x72:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn - reg_op]! */
              arm_access_memory(store, - reg_offset, reg, u32, yes, no_op);
              break;
-
-          case 0x73:
-             /* LDR rd, [rn - reg_op]! */
-             arm_access_memory(load, - reg_offset, reg, u32, yes, no_op);
-             break;
-
-          case 0x74:
-             /* STRB rd, [rn - reg_op] */
-             arm_access_memory(store, - reg_offset, reg, u8, no, no_op);
-             break;
+#endif
 
           case 0x75:
+#ifndef GBA_SDT_COLD_ALL
              /* LDRB rd, [rn - reg_op] */
              arm_access_memory(load, - reg_offset, reg, u8, no, no_op);
              break;
-
-          case 0x76:
-             /* STRB rd, [rn - reg_op]! */
-             arm_access_memory(store, - reg_offset, reg, u8, yes, no_op);
-             break;
-
-          case 0x77:
-             /* LDRB rd, [rn - reg_op]! */
-             arm_access_memory(load, - reg_offset, reg, u8, yes, no_op);
-             break;
+#endif
 
           case 0x78:
+#ifndef GBA_SDT_COLD_ALL
              /* STR rd, [rn + reg_op] */
              arm_access_memory(store, + reg_offset, reg, u32, no, no_op);
              break;
+#endif
 
           case 0x79:
+#ifndef GBA_SDT_COLD_ALL
              /* LDR rd, [rn + reg_op] */
              arm_access_memory(load, + reg_offset, reg, u32, no, no_op);
              break;
-
-          case 0x7A:
-             /* STR rd, [rn + reg_op]! */
-             arm_access_memory(store, + reg_offset, reg, u32, yes, no_op);
-             break;
-
-          case 0x7B:
-             /* LDR rd, [rn + reg_op]! */
-             arm_access_memory(load, + reg_offset, reg, u32, yes, no_op);
-             break;
+#endif
 
           case 0x7C:
+#ifndef GBA_SDT_COLD_ALL
              /* STRB rd, [rn + reg_op] */
              arm_access_memory(store, + reg_offset, reg, u8, no, no_op);
              break;
+#endif
 
           case 0x7D:
+#ifndef GBA_SDT_COLD_ALL
              /* LDRB rd, [rn + reg_op] */
              arm_access_memory(load, + reg_offset, reg, u8, no, no_op);
              break;
+#endif
 
+          case 0x40:
+          case 0x41:
+          case 0x42:
+          case 0x43:
+          case 0x45:
+          case 0x46:
+          case 0x47:
+          case 0x4A:
+          case 0x4B:
+          case 0x4E:
+          case 0x4F:
+          case 0x52:
+          case 0x53:
+          case 0x56:
+          case 0x57:
+          case 0x5A:
+          case 0x5F:
+          case 0x60:
+          case 0x62:
+          case 0x63:
+          case 0x65:
+          case 0x66:
+          case 0x67:
+          case 0x69:
+          case 0x6A:
+          case 0x6B:
+          case 0x6E:
+          case 0x6F:
+          case 0x73:
+          case 0x74:
+          case 0x76:
+          case 0x77:
+          case 0x7A:
+          case 0x7B:
           case 0x7E:
-             /* STRB rd, [rn + reg_op]! */
-             arm_access_memory(store, + reg_offset, reg, u8, yes, no_op);
-             break;
-
           case 0x7F:
-             /* LDRBT rd, [rn + reg_op]! */
-             arm_access_memory(load, + reg_offset, reg, u8, yes, no_op);
+             /* the rare LDR/STR forms, out of line (arm_sdt_cold) */
+             ARM_SDT_COLD();
              break;
 
           /* STM instructions: STMDA, STMIA, STMDB, STMIB */
@@ -3545,11 +3837,14 @@ m4a_resume:
        }
 #endif
 
-       if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
-         goto alert;
-
-       if (cycles_remaining > 0)
+       /* No alert test here: raising one biased the count (CPU_ALERT_OR),
+        * so this test ends the loop and the exit below takes it -- as in
+        * Thumb, and one load and branch less per ARM instruction. */
+       if (__builtin_expect(cycles_remaining > 0, 1))
           goto arm_loop_pc;     /* the back edge: pc is already the new PC */
+
+       if (cpu_alert & ALERT_STOP)
+          goto alert;
     } while(0);
 
     collapse_flags();

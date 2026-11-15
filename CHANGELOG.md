@@ -145,6 +145,16 @@ attached to the release:
   helpers are direct (-mlong-calls) instead of through veneers in the flash.
   Device, Kirby: mixer -24.5%, emulation -3.8%, same state hashes. If the
   AHB heap has no room the mixer stays in the flash (the log says which).
+- Interpreter: the ARM loop no longer tests for an alert (a halt, an
+  interrupt) after every instruction: raising one biases the cycle count, as
+  in Thumb. The rare LDR/STR forms (none above 0.05% of any game's ARM
+  instructions in a 150-game set) run out of line; LDM/STM, PUSH/POP within
+  one page of work RAM or a mapped region copy the registers directly; cpu.o
+  is built with -fno-tree-pre -fira-region=one, which keeps its register
+  allocation from flipping (ITCM free 1.1 -> 7.6 KB). Device: Tony Hawk's
+  Underground gameplay -2.9% interpreter; Thumb-heavy code +1.5-3% (Kirby,
+  Tony's menus). Same state hashes in 146 of 150 games (the other 4 as
+  before).
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the
