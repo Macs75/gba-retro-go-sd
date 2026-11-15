@@ -323,7 +323,7 @@ static const u8 gba_header_logo[156] = {
 #define calculate_v_flag_add(dest, src_a, src_b)                              \
   v_flag = ((~((src_a) ^ (src_b)) & ((src_a) ^ (dest))) >> 31)
 
-#define calculate_reg_sh()                                                    \
+#define calculate_reg_sh_body()                                               \
   u32 reg_sh = 0;                                                             \
   switch((opcode >> 4) & 0x07)                                                \
   {                                                                           \
@@ -412,7 +412,7 @@ static const u8 gba_header_logo[156] = {
     }                                                                         \
   }                                                                           \
 
-#define calculate_reg_sh_flags()                                              \
+#define calculate_reg_sh_flags_body()                                         \
   u32 reg_sh = 0;                                                             \
   switch((opcode >> 4) & 0x07)                                                \
   {                                                                           \
@@ -565,7 +565,7 @@ static const u8 gba_header_logo[156] = {
     }                                                                         \
   }                                                                           \
 
-#define calculate_reg_offset()                                                \
+#define calculate_reg_offset_body()                                           \
   u32 reg_offset = 0;                                                         \
   switch((opcode >> 5) & 0x03)                                                \
   {                                                                           \
@@ -609,6 +609,70 @@ static const u8 gba_header_logo[156] = {
       break;                                                                  \
     }                                                                         \
   }                                                                           \
+
+/* The barrel shifter for register operands, and the register offset of
+ * LDR/STR, are one shared copy each (the _body macros, unchanged): expanded
+ * in place they were ~500 B in each of the 32 register-operand ALU cases
+ * and ~100 B in each register-offset load/store, most of execute_arm's ITCM.
+ * The shifts by an immediate (LSL/LSR/ASR #n for an operand, LSL #n for a
+ * flag-setting operand or an offset), nearly all real code, stay inline: a
+ * call for every one of them cost the device ~5% (Tony Hawk). GCC: noinline
+ * keeps one copy; re-check execute_arm's size if these change. */
+static __attribute__((noinline)) u32 arm_reg_sh(u32 opcode, u32 c_flag)
+{
+  u32 rm = opcode & 0x0F;
+  calculate_reg_sh_body();
+  return reg_sh;
+}
+
+/* the value in the low word, the carry out in the high word */
+static __attribute__((noinline)) u64 arm_reg_sh_flags(u32 opcode, u32 c_flag)
+{
+  u32 rm = opcode & 0x0F;
+  calculate_reg_sh_flags_body();
+  return reg_sh | ((u64)c_flag << 32);
+}
+
+static __attribute__((noinline)) u32 arm_reg_offset(u32 opcode, u32 c_flag)
+{
+  u32 rm = opcode & 0x0F;
+  calculate_reg_offset_body();
+  return reg_offset;
+}
+
+#define calculate_reg_sh()                                                    \
+  u32 reg_sh;                                                                 \
+  {                                                                           \
+    const u32 _t = (opcode >> 4) & 0x07, _imm = (opcode >> 7) & 0x1F;         \
+    if (_t == 0)            /* LSL #imm (#0 = no shift) */                    \
+      reg_sh = reg[rm] << _imm;                                               \
+    else if (_t == 2)       /* LSR #imm (#0 = #32) */                         \
+      reg_sh = _imm ? reg[rm] >> _imm : 0;                                    \
+    else if (_t == 4)       /* ASR #imm (#0 = #32) */                         \
+      reg_sh = (s32)reg[rm] >> (_imm ? _imm : 31);                            \
+    else                    /* ROR/RRX, shifts by a register */               \
+      reg_sh = arm_reg_sh(opcode, c_flag);                                    \
+  }                                                                           \
+
+#define calculate_reg_sh_flags()                                              \
+  u32 reg_sh;                                                                 \
+  if ((opcode & 0x70) == 0) {   /* LSL #imm (#0: the carry is unchanged) */   \
+    const u32 _imm = (opcode >> 7) & 0x1F;                                    \
+    reg_sh = reg[rm];                                                         \
+    if (_imm) {                                                               \
+      c_flag = (reg_sh >> (32 - _imm)) & 0x01;                                \
+      reg_sh <<= _imm;                                                        \
+    }                                                                         \
+  } else {                                                                    \
+    u64 _r = arm_reg_sh_flags(opcode, c_flag);                                \
+    reg_sh = (u32)_r;                                                         \
+    c_flag = (u32)(_r >> 32);                                                 \
+  }                                                                           \
+
+#define calculate_reg_offset()                                                \
+  u32 reg_offset = ((opcode & 0x60) == 0) ?   /* LSL #imm */                  \
+                   reg[rm] << ((opcode >> 7) & 0x1F) :                        \
+                   arm_reg_offset(opcode, c_flag)                             \
 
 #define calculate_flags_add(dest, src_a, src_b)                               \
   calculate_z_flag(dest);                                                     \
