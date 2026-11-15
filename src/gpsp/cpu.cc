@@ -1322,10 +1322,15 @@ static inline __attribute__((always_inline)) cpu_alert_type exec_thumb_block_mem
   return cpu_alert;
 }
 
-static __attribute__((noinline)) cpu_alert_type exec_arm_block_mem_rt(
-    u32 rn, u32 reglist, s32 &cycles_remaining,
+/* The cycle count goes in by value and comes back in the low word, the
+ * alert in the high word (r0:r1): a reference would make execute_arm's
+ * cycles_remaining addressable, kept in memory and stored after every
+ * instruction. */
+static __attribute__((noinline)) u64 exec_arm_block_mem_rt(
+    u32 rn, u32 reglist, s32 cycles,
     AccMode mode, bool writeback, bool sbit, AddrMode addr_mode) {
-  return exec_arm_block_mem_body(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+  cpu_alert_type a = exec_arm_block_mem_body(rn, reglist, cycles, mode, writeback, sbit, addr_mode);
+  return (u32)cycles | ((u64)a << 32);
 }
 
 template<AccMode mode, bool writeback, bool sbit, AddrMode addr_mode>
@@ -1339,7 +1344,9 @@ static inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles
      (mode == AccLoad  && !writeback && addr_mode == AddrPreDec));
   if (common)
     return exec_arm_block_mem_body(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
-  return exec_arm_block_mem_rt(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+  u64 r = exec_arm_block_mem_rt(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+  cycles_remaining = (s32)(u32)r;
+  return (cpu_alert_type)(r >> 32);
 }
 
 template<AccMode mode, AddrMode addr_mode>
@@ -1863,8 +1870,12 @@ arm_loop_pc:
           {
              s32 m4a_cycles = cycles_remaining;
              collapse_flags();   /* the CPSR as the block's first instruction saw it */
+             /* copies: passing the flags' own addresses kept all four in
+              * memory for the whole interpreter */
+             u32 m4a_n = n_flag, m4a_z = z_flag, m4a_c = c_flag, m4a_v = v_flag;
              int m4a_rc = m4a_hle_execute(reg, &m4a_cycles,
-                                          &n_flag, &z_flag, &c_flag, &v_flag);
+                                          &m4a_n, &m4a_z, &m4a_c, &m4a_v);
+             n_flag = m4a_n; z_flag = m4a_z; c_flag = m4a_c; v_flag = m4a_v;
              /*   1  it finished           -> carry on at the block's exit
               *   2  it gave way mid-block -> an interrupt, a halt or a DMA stall
               *                               took the PC; drive from there
