@@ -141,6 +141,10 @@ attached to the release:
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the
   interpreter 7-9%, so it is opt-in).
+- `make PCS_BLOCK=N` (with `PCS=1`): one PC-sampler histogram every N replay
+  frames (default 1800; 120 gives one per `PROF/` window). A PROF build
+  without the sampler keeps the sampler build's code and data placement
+  (its room kept as padding), so the two compare directly.
 
 - The per-game idle tables (gpSP's `gba_over.h`, `gba_idle_loop.c` and the
   two hand-listed VCOUNT polls) are off: on 37 of the 47 games of the set

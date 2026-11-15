@@ -120,26 +120,28 @@ PROF ?= 0
 CPI ?= 0
 # PCS=1 (with PROF=1): the device PC sampler during replays (<rom>.pcs,
 # tools/gba_pcs_report.py). Off by default: its SD writes stall the loop
-# every 1800 frames and it swaps the interrupt table.
+# every 1800 frames and it swaps the interrupt table. PCS_BLOCK=120: one
+# histogram per PROF window instead (frames per block).
 PCS ?= 0
+PCS_BLOCK ?= 1800
 ifeq ($(PROF),1)
 CORE_C_DEFS += -DGBA_PROF
 ifeq ($(CPI),1)
 CORE_C_DEFS += -DGBA_ICOUNT
 endif
 ifeq ($(PCS),1)
-CORE_C_DEFS += -DGBA_PCS
+CORE_C_DEFS += -DGBA_PCS -DGBA_PCS_BLOCK=$(PCS_BLOCK)u
 endif
 endif
 GBA_PROF_STAMP := $(BUILD_DIR)/.gba_prof
 ifeq ($(filter clean host host_clean docker docker_pull docker_shell,$(MAKECMDGOALS)),)
 GBA_PROF_PREV := $(shell cat $(GBA_PROF_STAMP) 2>/dev/null)
 ifneq ($(GBA_PROF_PREV),)
-ifneq ($(GBA_PROF_PREV),$(PROF)$(CPI)$(PCS))
+ifneq ($(GBA_PROF_PREV),$(PROF)$(CPI)$(PCS)$(PCS_BLOCK))
 $(error $(BUILD_DIR) was built with PROF/CPI=$(GBA_PROF_PREV): make clean first)
 endif
 endif
-$(shell mkdir -p $(BUILD_DIR) && echo $(PROF)$(CPI)$(PCS) > $(GBA_PROF_STAMP))
+$(shell mkdir -p $(BUILD_DIR) && echo $(PROF)$(CPI)$(PCS)$(PCS_BLOCK) > $(GBA_PROF_STAMP))
 endif
 
 include $(GNW_CORE_SDK)/Makefile
@@ -254,7 +256,7 @@ DOCKER_RUN := docker run --rm $(DOCKER_TTY_FLAG) \
 
 docker:
 	$(V)$(ECHO) "[ DOCKER ]" $(DOCKER_IMAGE) "PROJECT_KIND=$(PROJECT_KIND)"
-	$(V)$(DOCKER_RUN) make --no-print-directory -j$$(nproc) PROJECT_KIND=$(PROJECT_KIND) PROF=$(PROF) CPI=$(CPI) PCS=$(PCS) AUTOREPLAY=$(AUTOREPLAY)
+	$(V)$(DOCKER_RUN) make --no-print-directory -j$$(nproc) PROJECT_KIND=$(PROJECT_KIND) PROF=$(PROF) CPI=$(CPI) PCS=$(PCS) PCS_BLOCK=$(PCS_BLOCK) AUTOREPLAY=$(AUTOREPLAY)
 
 docker_pull:
 	$(V)$(ECHO) "[ PULL ]" $(DOCKER_IMAGE)

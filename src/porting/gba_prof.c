@@ -192,9 +192,25 @@ static void frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited)
     last = frame_t0 = GBA_PROF_NOW();
 }
 
+#ifndef GBA_PCS
+/* Without the sampler a PROF build keeps the sampler build's layout: its
+ * .bss (72 B, before the GBA memories: their place mod 4 KB, the D-cache's
+ * set span) and its ITCM code (184 B, before the code pinned mod 32) take
+ * the same room here, unused. Re-measure the three sizes if the sampler
+ * changes (compare a PCS=1 and a PCS=0 build's symbols). */
+static uint32_t pcs_pad_bss[18] __attribute__((used));
+/* and its log strings (224 B, merged into the first object's string pool,
+ * before the renderer's tables in the flash: their place mod 4 KB) */
+static const uint8_t pcs_pad_ro[224] __attribute__((used)) = { 1 };
+__attribute__((section(".gba_itcm_text"), naked, used))
+void gba_pcs_pad_itcm(void) { __asm volatile(".space 184"); }
+#endif
+
 #ifdef GBA_PCS
 /* ------------------------------------------------------------ PC sampler */
+#ifndef GBA_PCS_BLOCK
 #define GBA_PCS_BLOCK 1800u            /* replay frames per histogram block */
+#endif
 #define PCS_MAGIC     0x53435047u      /* "GPCS" */
 #define ITCM_N        (0x10000u >> 4)
 
@@ -396,7 +412,14 @@ static int pcs_frame(void)
 #else
 /* make PCS=1 adds the PC sampler; without it these are no-ops */
 void gba_prof_set_xip(const void *addr, uint32_t size) { (void)addr; (void)size; }
-void gba_prof_quit(void) {}
+void gba_prof_quit(void)
+{
+    /* referenced, or --gc-sections drops the padding above -- and the two
+     * SDK wrappers only the sampler calls, which sit before cpu.o's hot
+     * tables in RAM */
+    __asm volatile("" :: "r"(gba_pcs_pad_itcm), "r"(pcs_pad_bss), "r"(pcs_pad_ro),
+                   "r"(strcpy), "r"(common_emu_frame_loop_reset));
+}
 static int pcs_frame(void) { return 0; }
 #endif /* GBA_PCS */
 #endif

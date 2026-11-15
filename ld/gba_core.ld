@@ -165,6 +165,9 @@ SECTIONS
     build/m4a_gpsp.o (.text*)
     build/video.o (.text.update_scanline)
     *(.gba_itcm_text*)       /* the scaler (gba_scale.c), PROF's PC sampler (gba_prof.c) */
+    /* The drawing code below at its measured place mod 32 (24: runs 20-27,
+     * with the PC sampler above it), with or without the sampler. */
+    . = ALIGN(. - 24, 32) + 24;
     /* Hot code that ran from the QSPI flash (gba.xip), by the PC sampler
      * (Kirby, 2026-11-14): the plain sprite renderer (the 16-bit, no-blend
      * instance; the other four stay in flash), the tile-layer drivers, and
