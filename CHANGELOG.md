@@ -88,7 +88,11 @@ attached to the release:
   masked only when it is misaligned.
 - Interpreter: the PC is kept in a local copy. The handlers' PC offsets
   are stores from it instead of load-add-store sequences on `reg[15]`, and
-  the fetch, region check and alignment read it instead of memory.
+  the fetch, region check and alignment read it instead of memory. Every write
+  of the PC also updates the copy, so the dispatch never reads `reg[15]`
+  (host `HOST_EXTRA_DEFS=-DGBA_PC_CHECK` checks it after every
+  instruction). Device, Tony Hawk's Underground: -3.2% interpreter cycles,
+  4,617 -> 4,926 pictures shown of 5,640.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial

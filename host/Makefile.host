@@ -74,9 +74,11 @@ HOST_CFLAGS := -O2 -g -Wall -Wextra -std=c11 \
 	-include host/stubs/config.h \
 	$(HOST_DEFS) $(HOST_INCLUDES) $(GBA_HOST_WARN_OFF)
 
+# HOST_EXTRA_DEFS: debug switches for the C++ core, e.g.
+# HOST_EXTRA_DEFS=-DGBA_PC_CHECK (touch the source: objects are not rebuilt)
 HOST_CXXFLAGS := -O2 -g -Wall -Wextra -std=c++17 -fno-rtti -fno-exceptions \
 	-include host/stubs/config.h \
-	$(HOST_DEFS) $(HOST_INCLUDES) $(GBA_HOST_WARN_OFF)
+	$(HOST_DEFS) $(HOST_INCLUDES) $(GBA_HOST_WARN_OFF) $(HOST_EXTRA_DEFS)
 
 # Device .S (Thumb/ARM) is not used on host — BIOS comes from host_gba_bios.S.
 # Soften ARM-only bilinear; stub imlib_draw_image in host_emu.c.

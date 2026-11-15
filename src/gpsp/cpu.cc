@@ -664,6 +664,28 @@ static const u8 gba_header_logo[156] = {
   goto skip_instruction;                                                      \
 }                                                                             \
 
+/* GBA_PC_CHECK (host): after every instruction, the local copy must equal
+ * reg[REG_PC] -- a write of the PC that forgot the copy aborts at once */
+#ifdef GBA_PC_CHECK
+#define PC_CHECK()                                                            \
+  if (pc != reg[REG_PC]) {                                                    \
+    fprintf(stderr, "PC_CHECK: local %08x != reg %08x (opcode %08x)\n",       \
+            pc, reg[REG_PC], opcode);                                         \
+    abort();                                                                  \
+  }
+#else
+#define PC_CHECK()
+#endif
+
+/* a write of rd that may be the PC: the local copy follows it */
+#define arm_write_rd(value)                                                   \
+{                                                                             \
+  u32 _v = (value);                                                           \
+  reg[rd] = _v;                                                               \
+  if (__builtin_expect(rd == REG_PC, 0))                                      \
+    pc = _v;                                                                  \
+}                                                                             \
+
 #define thumb_pc_offset(val)                                                  \
   reg[REG_PC] = (pc += (val))                                                 \
 
@@ -733,7 +755,7 @@ static const u8 gba_header_logo[156] = {
   arm_data_proc_##type();                                                     \
   dest = expr;                                                                \
   arm_pc_offset(-4);                                                          \
-  reg[rd] = dest;                                                             \
+  arm_write_rd(dest);                                                         \
 }                                                                             \
 
 #define flags_vars(src_a, src_b)                                              \
@@ -748,7 +770,7 @@ static const u8 gba_header_logo[156] = {
   u32 dest = expr;                                                            \
   calculate_flags_logic(dest);                                                \
   arm_pc_offset(-4);                                                          \
-  reg[rd] = dest;                                                             \
+  arm_write_rd(dest);                                                         \
   arm_spsr_restore_check();                                                   \
 }                                                                             \
 
@@ -764,7 +786,7 @@ static const u8 gba_header_logo[156] = {
   c_flag |= (dest < _sc);                                                     \
   calculate_flags_add(dest, _sa, _sb);                                        \
   arm_pc_offset(-4);                                                          \
-  reg[rd] = dest;                                                             \
+  arm_write_rd(dest);                                                         \
   arm_spsr_restore_check();                                                   \
 }
 
@@ -777,7 +799,7 @@ static const u8 gba_header_logo[156] = {
   dest = _sa + (~(_sb)) + _sc;                                                \
   calculate_flags_sub(dest, _sa, _sb, _sc);                                   \
   arm_pc_offset(-4);                                                          \
-  reg[rd] = dest;                                                             \
+  arm_write_rd(dest);                                                         \
   arm_spsr_restore_check();                                                   \
 }                                                                             \
 
@@ -830,7 +852,7 @@ static const u8 gba_header_logo[156] = {
   dest = (reg[rm] * reg[rs]) add_op;                                          \
   arm_multiply_flags_##flags(dest);                                           \
   arm_pc_offset(4);                                                           \
-  reg[rd] = dest + ((rd == REG_PC) << 2);  /* rd = pc: as the old += 4 */     \
+  arm_write_rd(dest + ((rd == REG_PC) << 2));  /* rd = pc: as the old += 4 */ \
 }                                                                             \
 
 #define arm_multiply_long_addop(type)                                         \
@@ -850,6 +872,8 @@ static const u8 gba_header_logo[156] = {
   arm_pc_offset(4);                                                           \
   reg[rdlo] = dest_lo + ((rdlo == REG_PC) << 2);                              \
   reg[rdhi] = dest_hi + ((rdhi == REG_PC) << 2);                              \
+  if (__builtin_expect((rdlo == REG_PC) | (rdhi == REG_PC), 0))               \
+    pc = reg[REG_PC];                                                         \
 }                                                                             \
 
 // Index by PRS fields (1 and 4 only!) and User-Privileged mode
@@ -870,7 +894,7 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 
 #define arm_psr_read(dummy, psr_reg)                                          \
   collapse_flags();                                                           \
-  reg[rd] = psr_reg                                                           \
+  arm_write_rd(psr_reg)                                                       \
 
 #define arm_psr_store_cpsr(source)                                            \
   const u32 store_mask = cpsr_masks[psr_pfield][PRIVMODE(reg[CPU_MODE])];     \
@@ -1021,7 +1045,9 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 #define no_op                                                                 \
 
 #define arm_access_memory_writeback_yes(off_op)                               \
-  reg[rn] = address off_op                                                    \
+  reg[rn] = address off_op;                                                   \
+  if (__builtin_expect(rn == REG_PC, 0))                                      \
+    pc = reg[REG_PC]                                                          \
 
 #define arm_access_memory_writeback_no(off_op)                                \
 
@@ -1047,7 +1073,15 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
   arm_pc_offset(-4);                                                          \
   arm_access_memory_writeback_##wb(wb_off_op);                                \
   access_type##_memory_##mem_type(address, access_type##_reg_op);             \
+  arm_access_memory_pc_##access_type();                                       \
 }                                                                             \
+
+/* a load into the PC: the local copy follows it */
+#define arm_access_memory_pc_load()                                           \
+  if (__builtin_expect(rd == REG_PC, 0))                                      \
+    pc = reg[REG_PC]                                                          \
+
+#define arm_access_memory_pc_store()                                          \
 
 // Excutes an LDM/STM instruction
 
@@ -1177,7 +1211,7 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   load_memory_##type(reg[rn], temp);                                          \
   store_memory_##type(reg[rn], reg[rm]);                                      \
   arm_pc_offset(4);                                                           \
-  reg[rd] = temp + ((rd == REG_PC) << 2);                                     \
+  arm_write_rd(temp + ((rd == REG_PC) << 2));                                 \
 }                                                                             \
 
 // Types: add_sub, add_sub_imm, alu_op, imm
@@ -1395,7 +1429,7 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   thumb_pc_offset(-2);                                                        \
   if(rd == 15)                                                                \
   {                                                                           \
-    reg[REG_PC] = dest & ~0x01;                                               \
+    reg[REG_PC] = pc = dest & ~0x01;                                          \
   }                                                                           \
   else                                                                        \
   {                                                                           \
@@ -1630,6 +1664,8 @@ cpu_loop_top:
     do
     {
 arm_loop:
+       pc = reg[REG_PC];        /* an entry (the loop's own back edge skips this) */
+arm_loop_pc:
 
        /* LAZY FLAGS: n/z/c/v live in locals and reach reg[REG_CPSR] only
         * where something reads its flag bits (collapse_flags at MRS, MSR, SWI,
@@ -1644,7 +1680,6 @@ arm_loop:
         * merged the loop's tail behind three taken branches and a spill per
         * instruction (+10% device time in the interpreter, Tony Hawk):
         * re-check the disassembly if this moves. */
-       pc = reg[REG_PC];
        if (__builtin_expect(pc != next_pc, 0))
        {
 #if defined(GBA_M4A_HLE) && !defined(M4A_HLE_VERIFY)
@@ -1675,7 +1710,7 @@ arm_loop:
              if (m4a_rc == 1)
              {
                 cycles_remaining = m4a_cycles;
-                reg[REG_PC] = m4a_hook_exit_pc;
+                reg[REG_PC] = pc = m4a_hook_exit_pc;
                 next_pc = 0xFFFFFFFFu;     /* the exit PC is tested next */
                 goto m4a_resume;
              }
@@ -2318,7 +2353,7 @@ arm_loop:
                    }
                    else
                    {
-                      reg[REG_PC] = src;
+                      reg[REG_PC] = pc = src;
                    }
                    cycles_remaining -= ws_cyc_nseq[src >> 24][1];
                 }
@@ -3088,70 +3123,70 @@ arm_loop:
 
           case 0x80:   /* STMDA rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x88:   /* STMIA rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x90:   /* STMDB rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x98:   /* STMIB rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
 
           case 0x82:   /* STMDA rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x8A:   /* STMIA rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x92:   /* STMDB rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x9A:   /* STMIB rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
 
           case 0x84:   /* STMDA rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x8C:   /* STMIA rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x94:   /* STMDB rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x9C:   /* STMIB rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
 
           case 0x86:   /* STMDA rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x8E:   /* STMIA rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x96:   /* STMDB rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x9E:   /* STMIB rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
 
 
@@ -3159,77 +3194,77 @@ arm_loop:
 
           case 0x81:   /* LDMDA rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x89:   /* LDMIA rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x91:   /* LDMDB rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x99:   /* LDMIB rn, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
 
           case 0x83:   /* LDMDA rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x8B:   /* LDMIA rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x93:   /* LDMDB rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
           case 0x9B:   /* LDMIB rn!, rlist */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             break;
 
           case 0x85:   /* LDMDA rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x8D:   /* LDMIA rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x95:   /* LDMDB rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x9D:   /* LDMIB rn, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
 
           case 0x87:   /* LDMDA rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x8F:   /* LDMIA rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x97:   /* LDMDB rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x9F:   /* LDMIB rn!, rlist^ */
             cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining);
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
 
@@ -3266,6 +3301,7 @@ arm_loop:
               int bios_cost = 0;
               if (gba_bios_hle((opcode >> 16) & 0xFF, reg, &bios_cost)) {
                 reg[REG_PC] += 4;
+                pc = reg[REG_PC];
                 gba_bios_hle_charge(bios_cost);
                 break;
               }
@@ -3274,7 +3310,7 @@ arm_loop:
             reg[REG_BUS_VALUE] = 0xe3a02004;  // After SWI, we read bios[0xE4]
             REG_MODE(MODE_SUPERVISOR)[6] = reg[REG_PC] + 4;
             REG_SPSR(MODE_SUPERVISOR) = reg[REG_CPSR];
-            reg[REG_PC] = 0x00000008;
+            reg[REG_PC] = pc = 0x00000008;
             // Move to ARM mode, Supervisor mode and disable IRQs
             reg[REG_CPSR] = (reg[REG_CPSR] & ~0x3F) | 0x13 | 0x80;
             set_cpu_mode(MODE_SUPERVISOR);
@@ -3284,7 +3320,7 @@ arm_loop:
 skip_instruction:
 
        /* End of Execute ARM instruction */
-       pc = reg[REG_PC];        /* the new PC (a jump wrote it directly) */
+       PC_CHECK();              /* pc is the new PC: every write of it kept it */
        cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][1];
 
 #ifdef M4A_HLE_VERIFY
@@ -3334,7 +3370,9 @@ m4a_resume:
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
          goto alert;
 
-    } while(cycles_remaining > 0);
+       if (cycles_remaining > 0)
+          goto arm_loop_pc;     /* the back edge: pc is already the new PC */
+    } while(0);
 
     collapse_flags();
     if (idle_loop_cond == IDLE_COND_GENERIC)
@@ -3348,6 +3386,8 @@ m4a_resume:
     do
     {
 thumb_loop:
+       pc = reg[REG_PC];        /* an entry (the loop's own back edge skips this) */
+thumb_loop_pc:
 
 #ifdef M4A_COUNT_INSNS
        m4a_insns_interpreted++;
@@ -3357,7 +3397,6 @@ thumb_loop:
        /* Execute THUMB instruction */
 
        using_instruction(thumb);
-       pc = reg[REG_PC];
        check_pc_region();
        if (__builtin_expect(pc & 0x01, 0)) {   /* stored only when odd */
           pc &= ~0x01;
@@ -3566,7 +3605,7 @@ thumb_loop:
                 src = reg[rs];
                 if(src & 0x01)
                 {
-                   reg[REG_PC] = src - 1;
+                   reg[REG_PC] = pc = src - 1;
                 }
                 else
                 {
@@ -3702,32 +3741,32 @@ thumb_loop:
 
           case 0xB4:  /* PUSH rlist */
              cpu_alert |= exec_thumb_block_mem<AccStore, AddrPreDec>(
-               REG_SP, opcode & 0xFF, cycles_remaining);
+               REG_SP, opcode & 0xFF, cycles_remaining); pc = reg[REG_PC];
              break;
 
           case 0xB5:  /* PUSH rlist, lr */
              cpu_alert |= exec_thumb_block_mem<AccStore, AddrPreDec>(
-               REG_SP, (opcode & 0xFF) | (1 << REG_LR), cycles_remaining);
+               REG_SP, (opcode & 0xFF) | (1 << REG_LR), cycles_remaining); pc = reg[REG_PC];
              break;
 
           case 0xBC:  /* POP rlist */
              cpu_alert |= exec_thumb_block_mem<AccLoad, AddrPostInc>(
-               REG_SP, opcode & 0xFF, cycles_remaining);
+               REG_SP, opcode & 0xFF, cycles_remaining); pc = reg[REG_PC];
              break;
 
           case 0xBD:  /* POP rlist, pc */
              cpu_alert |= exec_thumb_block_mem<AccLoad, AddrPostInc>(
-               REG_SP, (opcode & 0xFF) | (1 << REG_PC), cycles_remaining);
+               REG_SP, (opcode & 0xFF) | (1 << REG_PC), cycles_remaining); pc = reg[REG_PC];
              break;
 
           case 0xC0 ... 0xC7:    /* STMIA r0..7!, rlist */
              cpu_alert |= exec_thumb_block_mem<AccStore, AddrPostInc>(
-               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining);
+               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining); pc = reg[REG_PC];
              break;
 
           case 0xC8 ... 0xCF:    /* LDMIA r0..7!, rlist */
              cpu_alert |= exec_thumb_block_mem<AccLoad, AddrPostInc>(
-               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining);
+               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining); pc = reg[REG_PC];
              break;
 
           case 0xD0:   /* BEQ label */
@@ -3780,6 +3819,7 @@ thumb_loop:
                int bios_cost = 0;
                if (gba_bios_hle(opcode & 0xFF, reg, &bios_cost)) {
                  reg[REG_PC] += 2;
+                 pc = reg[REG_PC];
                  gba_bios_hle_charge(bios_cost);
                  break;
                }
@@ -3821,14 +3861,14 @@ thumb_loop:
                 u32 newlr = (pc + 2) | 0x01;
                 u32 newpc = reg[REG_LR] + (offset * 2);
                 reg[REG_LR] = newlr;
-                reg[REG_PC] = newpc;
+                reg[REG_PC] = pc = newpc;
                 cycles_remaining -= ws_cyc_nseq[newpc >> 24][0];
                 break;
              }
        }
 
        /* End of Execute THUMB instruction */
-       pc = reg[REG_PC];        /* the new PC (a jump wrote it directly) */
+       PC_CHECK();
        cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][0];
 
 #ifdef GBA_ICOUNT
@@ -3849,7 +3889,9 @@ thumb_loop:
        if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
           goto alert;
 
-    } while(cycles_remaining > 0);
+       if (cycles_remaining > 0)
+          goto thumb_loop_pc;   /* the back edge: pc is already the new PC */
+    } while(0);
 
     collapse_flags();
     if (idle_loop_cond == IDLE_COND_GENERIC)
