@@ -158,6 +158,10 @@ attached to the release:
 - Interpreter: ARM load/store offsets shifted right (LSR/ASR #n), as texture
   mappers index, run inline like LSL #n instead of through a call: V-Rally 3's
   race -2% interpreter.
+- The rotated/scaled background renderers (modes 1 and 2: the plain-colour
+  set and the blended layers' instances) run from RAM instead of the flash.
+  Device, F-Zero: Maximum Velocity's race: drawing -5.1% per drawn frame,
+  frames skipped 246 -> 157.
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the

@@ -124,6 +124,23 @@ SECTIONS
   .data :
   {
     *(.data*)
+    . = ALIGN(4);
+    /* The rotated/scaled background renderers (modes 1 and 2), out of the
+     * flash, at the end of the RAM code so nothing in front of them moves:
+     * the plain-colour set (the 16-bit full-colour instances, no mosaic,
+     * and their dispatchers) and the blended track layers' instances
+     * (indexed / stacked colour, wrapping, rotated). 29% of the core's work
+     * in F-Zero: Maximum Velocity's race, all from the flash (2026-11-15).
+     * They use the room before .bss's pin (2.8 KB then): if more code has to
+     * go here, .bss moves 4 KB and RAM_EMU has no room for that. Not in
+     * .core_entry: the linker puts a section's veneers at its end, and after
+     * them there they moved cpu.o's tables. In .data, which is otherwise
+     * empty: the SDK packs only .core_entry and .data (sdk/Makefile). */
+    build/video.o (.text._Z22render_scanline_affineItL8rendtype0E*)
+    build/video.o (.text._Z24render_affine_backgroundItL8rendtype0E*Lb0EEv*)
+    build/video.o (.text._Z24render_affine_backgroundItL8rendtype1ELb?ELb1ELb1ELb0EEv*)
+    build/video.o (.text._Z24render_affine_backgroundIjL8rendtype2ELb?ELb1ELb1ELb0EEv*)
+    . = ALIGN(8);
   } >RAM_EMU
 
   __CORE_CODE_END__ = .;
