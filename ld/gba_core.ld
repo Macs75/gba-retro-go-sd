@@ -49,8 +49,11 @@ SECTIONS
     . = ALIGN(4);
     _GBA_MAIN_CODE_END = .;
 
-    /* Hottest remaining video that does not fit leftover ITCM. */
-    build/video.o (.text._Z20render_scanline_text*)
+    /* Hottest remaining video that does not fit leftover ITCM. The 16-bit
+     * full-colour text layers (the hot pair) run from ITCM (.core_itcm). */
+    build/video.o (.text._Z20render_scanline_textItL8rendtype1*)
+    build/video.o (.text._Z20render_scanline_textIjL8rendtype1*)
+    build/video.o (.text._Z20render_scanline_textIjL8rendtype2*)
     build/video.o (.text._Z13render_object*)
     build/video.o (.text._ZL16render_w_effects*)
     build/video.o (.text._ZL9order_obj*)
@@ -142,6 +145,10 @@ SECTIONS
     build/video.o (.text._Z20render_scanline_objsItL8rendtype0EEvjjjPvPKt*)
     build/video.o (.text._Z18tile_render_layers*)
     build/m4a_hle.o (.text.rd_* .text.wr_* .text.win_hold)
+    /* The text-layer renderer's hot pair: their unrolled tile loops
+     * (video.cc TILE_LOOP) do not fit RAM_EMU. */
+    build/video.o (.text._Z20render_scanline_textItL8rendtype0ELb1EEvjjjPvPKt)
+    build/video.o (.text._Z20render_scanline_textItL8rendtype0ELb0EEvjjjPvPKt)
     /* Read-only tables the interpreter reads every instruction: the
      * threaded Thumb dispatch's label table (ITCM serves data reads too,
      * and RAM_EMU has no room). */

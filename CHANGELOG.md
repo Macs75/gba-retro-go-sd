@@ -119,6 +119,14 @@ attached to the release:
   ITCM (the device PC sampler found them running from gba.xip); the serial
   port is no longer polled at every event while no link device is
   emulated.
+- Renderer: the text layers' tile loops are unrolled (8 pixels a tile as
+  fixed bit-field extracts, no loop counter or variable shift) for the
+  16-bit full-colour instances, the plain layers of nearly every game, and
+  the 32-bit indexed/stacked ones, which every screen with blending or a
+  brightness fade draws through (31% of the text pixels in the first
+  minute of a 150-game set). Same pictures, frame by frame, in 10 games.
+  Device: Tony Hawk's Underground drawing -20%, Kirby & The Amazing Mirror
+  -13%; Tony's blended menu a further -12% per drawn frame.
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the

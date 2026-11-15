@@ -66,6 +66,14 @@ static uint16_t *rec_buf;            /* AHB heap at the first use */
 static uint32_t rec_n, rec_pos;
 static char rec_file[300];
 static void rec_print_hash(void);
+#ifdef HOST_BUILD
+/* host: a running hash of every rendered GBA frame (240x160, RGB565), printed
+ * as REC/pix with each REC/hash line -- the REC/hash lines cover the machine,
+ * not the picture, so a renderer change is checked with this */
+static uint32_t rec_pix_h = GBA_REC_FNV0;
+extern uint16_t *gba_screen_pixels;
+#endif
+
 static uint32_t rec_hashed_at = 0xFFFFFFFFu;   /* the frame of the last REC/hash line */
 
 uint32_t gba_rec_fnv(const void *p, uint32_t n, uint32_t h)
@@ -183,6 +191,9 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
     rec_frame = 0;
     rec_hashed_at = 0xFFFFFFFFu;
     rec_audio_h = FNV0;
+#ifdef HOST_BUILD
+    rec_pix_h = FNV0;
+#endif
     rec_n = rec_pos = 0;
     power_on();
     printf("REC: %s from power-on, game %08lx, setup %08lx\n",
@@ -286,6 +297,9 @@ static void rec_print_hash(void)
         last_n = gba_idle_skips;
     }
 #endif
+#ifdef HOST_BUILD
+    printf("REC/pix frame=%lu hash=%08lx\n", (unsigned long)rec_frame, (unsigned long)rec_pix_h);
+#endif
     printf("REC/hash frame=%lu iwram=%08lx ewram=%08lx vram=%08lx oam=%08lx pal=%08lx io=%08lx cpu=%08lx audio=%08lx\n",
            (unsigned long)rec_frame, (unsigned long)h[0], (unsigned long)h[1],
            (unsigned long)h[2], (unsigned long)h[3], (unsigned long)h[4],
@@ -302,6 +316,10 @@ void gba_rec_frame_done(void)
 {
     if (rec_mode == GBA_REC_OFF)
         return;
+#ifdef HOST_BUILD
+    if (gba_screen_pixels)
+        rec_pix_h = fnv(gba_screen_pixels, 240u * 160u * 2u, rec_pix_h);
+#endif
     rec_frame++;
 #ifdef HOST_BUILD
     static unsigned int every;

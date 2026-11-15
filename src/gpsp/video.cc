@@ -221,7 +221,45 @@ static inline void rend_part_tile_Nbpp(u32 bg_comb, u32 px_comb,
   }
 }
 
+// One pixel of a full tile (render_tile_Nbpp): pal is the 256-colour palette
+// (8bpp) or the tile's 16-colour sub-palette (4bpp), flg the combine flags.
+template<typename dtype, rendtype rdtype, bool isbase>
+static inline void tile_pixel(dtype *dest_ptr, u32 pval, const u16 *pal,
+  u32 flg, u32 bg_comb, u16 bgcolor
+) {
+  if (pval) {
+    if (rdtype == FULLCOLOR)
+      *dest_ptr = pal[pval];
+    else if (rdtype == INDXCOLOR)
+      *dest_ptr = pval | flg;  // Add combine flags
+    else if (rdtype == STCKCOLOR)
+      *dest_ptr = pval | flg | ((isbase ? bg_comb : *dest_ptr) << 16);
+  }
+  else if (isbase) {
+    *dest_ptr = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb;
+  }
+}
+
 // Same as above, but optimized for full tiles. Skip comments here.
+//
+// GCC: the hot cases get their pixel loops unrolled (TILE_LOOP), so a pixel
+// is a fixed bit-field extract instead of a variable shift, a counter and a
+// loop branch: at -O2 (video.o) GCC kept them as loops, ~8 instructions a
+// pixel. They are the 16-bit full-colour instances (the plain text layers of
+// nearly every game, the hottest renderer code on the device: Tony Hawk's
+// 8bpp layers) and the 32-bit indexed/stacked ones (any screen with blending
+// or a brightness fade: 31% of the text pixels of a 150-game set's first
+// minute). The 16-bit indexed ones keep the loops (3%). The unrolled 32-bit
+// instances (~+30%) fit in the padding before the RAM_EMU pin
+// (ld/gba_core.ld); re-check the layout if their sizes change.
+#define TILE_LOOP(n, ...)  /* variadic: the body carries commas */          \
+  if ((rdtype == FULLCOLOR && sizeof(dtype) == 2) || sizeof(dtype) == 4) {    \
+    _Pragma("GCC unroll 8")                                                   \
+    for (u32 i = 0; i < (n); i++) { __VA_ARGS__; }                            \
+  } else {                                                                    \
+    for (u32 i = 0; i < (n); i++) { __VA_ARGS__; }                            \
+  }
+
 template<typename dtype, rendtype rdtype, bool is8bpp, bool isbase, bool hflip>
 static inline void render_tile_Nbpp(
   u32 bg_comb, u32 px_comb, dtype *dest_ptr, u16 tile,
@@ -234,27 +272,14 @@ static inline void render_tile_Nbpp(
     tile_ptr += vertical_pixel_flip;
 
   if (is8bpp) {
-    for (u32 j = 0; j < 2; j++) {
+    for (u32 j = 0; j < 2; j++, dest_ptr += 4) {
       u32 tilepix = eswap32(((u32*)tile_ptr)[hflip ? 1-j : j]);
       if (tilepix) {
-        for (u32 i = 0; i < 4; i++, dest_ptr++) {
-          u8 pval = hflip ? (tilepix >> (24 - i*8)) : (tilepix >> (i*8));
-          if (pval) {
-            if (rdtype == FULLCOLOR)
-              *dest_ptr = paltbl[pval];
-            else if (rdtype == INDXCOLOR)
-              *dest_ptr = pval | px_comb;  // Add combine flags
-            else if (rdtype == STCKCOLOR)
-              *dest_ptr = pval | px_comb | ((isbase ? bg_comb : *dest_ptr) << 16);
-          }
-          else if (isbase) {
-            *dest_ptr = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb;
-          }
-        }
-      } else {
-        for (u32 i = 0; i < 4; i++, dest_ptr++)
-          if (isbase)
-            *dest_ptr = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb;
+        TILE_LOOP(4, tile_pixel<dtype, rdtype, isbase>(&dest_ptr[i],
+          (u8)(hflip ? (tilepix >> (24 - i*8)) : (tilepix >> (i*8))),
+          paltbl, px_comb, bg_comb, bgcolor))
+      } else if (isbase) {
+        TILE_LOOP(4, dest_ptr[i] = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb)
       }
     }
   } else {
@@ -263,28 +288,15 @@ static inline void render_tile_Nbpp(
       u16 tilepal = (tile >> 12) << 4;
       u16 pxflg = px_comb | tilepal;
       const u16 *subpal = &paltbl[tilepal];
-      for (u32 i = 0; i < 8; i++, dest_ptr++) {
-        u8 pval = (hflip ? (tilepix >> ((7-i)*4)) : (tilepix >> (i*4))) & 0xF;
-        if (pval) {
-          if (rdtype == FULLCOLOR)
-            *dest_ptr = subpal[pval];
-          else if (rdtype == INDXCOLOR)
-            *dest_ptr = pxflg | pval;
-          else if (rdtype == STCKCOLOR)
-            *dest_ptr = pxflg | pval | ((isbase ? bg_comb : *dest_ptr) << 16);
-        }
-        else if (isbase) {
-          *dest_ptr = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb;
-        }
-      }
+      TILE_LOOP(8, tile_pixel<dtype, rdtype, isbase>(&dest_ptr[i],
+        (hflip ? (tilepix >> ((7-i)*4)) : (tilepix >> (i*4))) & 0xF,
+        subpal, pxflg, bg_comb, bgcolor))
     } else if (isbase) {
       // In this case we simply fill the pixels with background pixels
-      for (u32 i = 0; i < 8; i++, dest_ptr++)
-        *dest_ptr = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb;
+      TILE_LOOP(8, dest_ptr[i] = (rdtype == FULLCOLOR) ? bgcolor : 0 | bg_comb)
     }
   }
 }
-
 
 template<typename stype, rendtype rdtype, bool isbase, bool is8bpp>
 static void render_scanline_text_fast(u32 layer,

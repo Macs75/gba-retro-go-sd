@@ -190,7 +190,15 @@ static const m4a_bus s_bus = { m4a_map, m4a_cost, m4a_refill, 0 };
 
 /* ---------------------------------------------------------------- the scan */
 
-void m4a_hle_reset(void)
+/* Cold (power-on, once a frame): to the XIP flash with the other cold code
+ * (ld/gba_core.ld .gba_cold_text), not to ITCM with the rest of this file. */
+#ifndef HOST_BUILD
+#define M4A_COLD __attribute__((section(".gba_cold_text")))
+#else
+#define M4A_COLD
+#endif
+
+M4A_COLD void m4a_hle_reset(void)
 {
     m4a_hook_pc      = 0;
     m4a_hook_exit_pc = 0;
@@ -200,7 +208,7 @@ void m4a_hle_reset(void)
 }
 
 /* Call once per frame. Cheap, and stops calling itself once it has an answer. */
-void m4a_hle_scan_frame(void)
+M4A_COLD void m4a_hle_scan_frame(void)
 {
     unsigned char *iwram_page;
     uint32_t pc = 0;
