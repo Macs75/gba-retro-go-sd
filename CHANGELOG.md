@@ -155,6 +155,9 @@ attached to the release:
   Underground gameplay -2.9% interpreter; Thumb-heavy code +1.5-3% (Kirby,
   Tony's menus). Same state hashes in 146 of 150 games (the other 4 as
   before).
+- Interpreter: ARM load/store offsets shifted right (LSR/ASR #n), as texture
+  mappers index, run inline like LSL #n instead of through a call: V-Rally 3's
+  race -2% interpreter.
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the

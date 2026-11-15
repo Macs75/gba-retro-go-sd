@@ -614,8 +614,8 @@ static const u8 gba_header_logo[156] = {
  * LDR/STR, are one shared copy each (the _body macros, unchanged): expanded
  * in place they were ~500 B in each of the 32 register-operand ALU cases
  * and ~100 B in each register-offset load/store, most of execute_arm's ITCM.
- * The shifts by an immediate (LSL/LSR/ASR #n for an operand, LSL #n for a
- * flag-setting operand or an offset), nearly all real code, stay inline: a
+ * The shifts by an immediate (LSL/LSR/ASR #n for an operand or an offset,
+ * LSL #n for a flag-setting operand), nearly all real code, stay inline: a
  * call for every one of them cost the device ~5% (Tony Hawk). GCC: noinline
  * keeps one copy; re-check execute_arm's size if these change. */
 static __attribute__((noinline)) u32 arm_reg_sh(u32 opcode, u32 c_flag)
@@ -669,10 +669,22 @@ static __attribute__((noinline)) u32 arm_reg_offset(u32 opcode, u32 c_flag)
     c_flag = (u32)(_r >> 32);                                                 \
   }                                                                           \
 
+/* LSL/LSR/ASR #imm inline, as calculate_reg_sh: texture mappers and table
+ * lookups index with them (ldrb rd, [rn, rm, lsr #24]: 4 per pixel quad in
+ * V-Rally 3's span loop, 43% of its race); ROR/RRX call the shared copy. */
 #define calculate_reg_offset()                                                \
-  u32 reg_offset = ((opcode & 0x60) == 0) ?   /* LSL #imm */                  \
-                   reg[rm] << ((opcode >> 7) & 0x1F) :                        \
-                   arm_reg_offset(opcode, c_flag)                             \
+  u32 reg_offset;                                                             \
+  {                                                                           \
+    const u32 _t = (opcode >> 5) & 0x03, _imm = (opcode >> 7) & 0x1F;         \
+    if (_t == 0)            /* LSL #imm */                                    \
+      reg_offset = reg[rm] << _imm;                                           \
+    else if (_t == 1)       /* LSR #imm (#0 = #32) */                         \
+      reg_offset = _imm ? reg[rm] >> _imm : 0;                                \
+    else if (_t == 2)       /* ASR #imm (#0 = #32) */                         \
+      reg_offset = (s32)reg[rm] >> (_imm ? _imm : 31);                        \
+    else                    /* ROR #imm, RRX */                               \
+      reg_offset = arm_reg_offset(opcode, c_flag);                            \
+  }                                                                           \
 
 #define calculate_flags_add(dest, src_a, src_b)                               \
   calculate_z_flag(dest);                                                     \
