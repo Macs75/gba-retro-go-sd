@@ -1120,7 +1120,13 @@ static __attribute__((noinline)) cpu_alert_type cpu_store32(u32 a, u32 v)
     cycles_remaining -= ws_cyc_seq[region][1];                                \
     STATS_MEMORY_ACCESS(write, u32, region);                                  \
   }                                                                           \
-  work_ram_store(32, _address, value);                                        \
+  /* only the block transfers use this: the work-RAM store done here, as  */  \
+  /* cpu_store32 would, without a call per register                       */  \
+  if (((_address >> 24) - 2) <= 1) {                                          \
+    *(u32 *)(memory_map_read[_address >> 15] + (_address & 0x7FFF)) = (value); \
+    gba_idle_sidefx++;                                                        \
+  } else                                                                      \
+    cpu_alert |= write_memory32(_address, value);                             \
 }                                                                             \
 
 #define load_memory_u8(address, dest)                                         \
@@ -1193,9 +1199,17 @@ static __attribute__((noinline)) cpu_alert_type cpu_store32(u32 a, u32 v)
 typedef enum { AccLoad, AccStore } AccMode;
 typedef enum { AddrPreInc, AddrPreDec, AddrPostInc, AddrPostDec } AddrMode;
 
-template<AccMode mode, bool writeback, bool sbit, AddrMode addr_mode>
-inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles_remaining) {
+/* LDM/STM: one body each for ARM and Thumb, the addressing mode passed in.
+ * The common forms (exec_arm_block_mem below: push/pop, LDMIA/STMIA, the
+ * LDMDB frame return; every Thumb form) inline it with constant arguments,
+ * as gpSP's templates did; the 26 other ARM forms share one noinline copy.
+ * All 38 inlined were ~8 KB of ITCM; all shared cost the device ~3%
+ * (a call per LDM/STM, Tony Hawk). */
+static inline __attribute__((always_inline)) cpu_alert_type exec_arm_block_mem_body(
+    u32 rn, u32 reglist, s32 &cycles_ref,
+    AccMode mode, bool writeback, bool sbit, AddrMode addr_mode) {
   cpu_alert_type cpu_alert = CPU_ALERT_NONE;
+  s32 cycles_remaining = cycles_ref;   /* a local: the reference was stored per register */
   // Register register usage stats.
   using_register(arm, rn, memory_base);
   using_register_list(arm, reglist, 16);
@@ -1248,12 +1262,15 @@ inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles_remain
   if (sbit && (mode == AccStore || rn != REG_PC))
     set_cpu_mode(cpu_modes[old_cpsr & 0xF]);
 
+  cycles_ref = cycles_remaining;
   return cpu_alert;
 }
 
-template<AccMode mode, AddrMode addr_mode>
-inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_remaining) {
+static inline __attribute__((always_inline)) cpu_alert_type exec_thumb_block_mem_body(
+    u32 rn, u32 reglist, s32 &cycles_ref,
+    AccMode mode, AddrMode addr_mode) {
   cpu_alert_type cpu_alert = CPU_ALERT_NONE;
+  s32 cycles_remaining = cycles_ref;
   // Register register usage stats.
   using_register(arm, rn, memory_base);
   using_register_list(arm, reglist, 16);
@@ -1301,7 +1318,33 @@ inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_rema
   if (!writeback_first)
     reg[rn] = endaddr;
 
+  cycles_ref = cycles_remaining;
   return cpu_alert;
+}
+
+static __attribute__((noinline)) cpu_alert_type exec_arm_block_mem_rt(
+    u32 rn, u32 reglist, s32 &cycles_remaining,
+    AccMode mode, bool writeback, bool sbit, AddrMode addr_mode) {
+  return exec_arm_block_mem_body(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+}
+
+template<AccMode mode, bool writeback, bool sbit, AddrMode addr_mode>
+static inline cpu_alert_type exec_arm_block_mem(u32 rn, u32 reglist, s32 &cycles_remaining) {
+  /* the forms compilers emit: STMDB rn! (push), LDMIA rn! (pop), LDMIA,
+   * STMIA, STMIA rn!, LDMDB (ARM SDT's frame-pointer return) */
+  const bool common = !sbit &&
+    ((mode == AccStore && writeback && addr_mode == AddrPreDec) ||
+     (mode == AccLoad  && addr_mode == AddrPostInc) ||
+     (mode == AccStore && addr_mode == AddrPostInc) ||
+     (mode == AccLoad  && !writeback && addr_mode == AddrPreDec));
+  if (common)
+    return exec_arm_block_mem_body(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+  return exec_arm_block_mem_rt(rn, reglist, cycles_remaining, mode, writeback, sbit, addr_mode);
+}
+
+template<AccMode mode, AddrMode addr_mode>
+static inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycles_remaining) {
+  return exec_thumb_block_mem_body(rn, reglist, cycles_remaining, mode, addr_mode);
 }
 
 #define arm_swap(type)                                                        \

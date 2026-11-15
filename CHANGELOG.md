@@ -103,7 +103,11 @@ attached to the release:
   XIP flash with the rest of the cold code. The register-operand barrel shifter and
   the shifted register offset of LDR/STR are one shared copy each instead
   of being expanded in every ALU and load/store case; the shifts by an
-  immediate, nearly all real code, stay inline.
+  immediate, nearly all real code, stay inline. LDM/STM share one body: the
+  forms compilers emit (push/pop, LDMIA/STMIA, LDMDB, all Thumb forms)
+  inline it, the 26 other ARM forms call one copy. ITCM free: 840 B ->
+  12.6 KB. Device, Tony Hawk's Underground: interpreter cost unchanged,
+  5,200 -> 5,264 pictures shown of 5,640, frames over budget 2,359 -> 1,981.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial
