@@ -178,7 +178,12 @@ CXXFLAGS += $(GBA_WARN_OFF)
 # is expanded per object (rebuilding CFLAGS with := expanded $@ empty and
 # lost the dependency files and -DUSE_HAL_DRIVER of these objects).
 $(BUILD_DIR)/gba_memory.o:       OPT := -O3
-$(BUILD_DIR)/cpu.o:              OPT := -O3
+# GCC: cpu.cc's threaded Thumb dispatch ends every handler with its own
+# fetch and computed goto (THUMB_NEXT). GCC factors computed gotos into one
+# shared dispatch and copies it back only when it is at most
+# max-goto-duplication-insns long (8): the tail is ~20, so raise the limit or
+# every handler jumps to a single shared dispatch again.
+$(BUILD_DIR)/cpu.o:              OPT := -O3 --param max-goto-duplication-insns=40 -fno-crossjumping -fno-tree-tail-merge
 $(BUILD_DIR)/video.o:            OPT := -O2
 $(BUILD_DIR)/sound.o:            OPT := -O2
 $(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2

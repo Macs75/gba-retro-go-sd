@@ -1007,6 +1007,24 @@ const u32 spsr_masks[4] = { 0x00000000, 0x000000EF, 0xF0000000, 0xF00000EF };
 #define aligned_address_mask16 0xF0000001
 #define aligned_address_mask32 0xF0000003
 
+/* An alert (a halt, an interrupt) raised by an instruction is checked
+ * once it ends. Thumb's per-instruction tail does not test it: raising one
+ * also subtracts ALERT_BIAS from the cycle count, so the tail's own
+ * "cycles left?" test catches it, and alert: adds the bias back -- the same
+ * instruction, the same cycle count. Every alert raised in execute_arm goes
+ * through CPU_ALERT_OR (the stores, the block transfers). */
+#define ALERT_BIAS (1 << 29)
+#define ALERT_STOP (CPU_ALERT_HALT | CPU_ALERT_IRQ)
+#define CPU_ALERT_OR(...)  /* variadic: template arguments carry commas */  \
+  {                                                                           \
+    cpu_alert_type _al = (__VA_ARGS__);                                       \
+    if (__builtin_expect(_al != CPU_ALERT_NONE, 0)) {                         \
+      if ((_al & ALERT_STOP) && !(cpu_alert & ALERT_STOP))                    \
+        cycles_remaining -= ALERT_BIAS;                                       \
+      cpu_alert |= _al;                                                       \
+    }                                                                         \
+  }                                                                           \
+
 static __attribute__((noinline)) cpu_alert_type cpu_store8(u32 a, u32 v)
 {
   if (((a >> 24) - 2) <= 1) {
@@ -1074,7 +1092,7 @@ static __attribute__((noinline)) cpu_alert_type cpu_store32(u32 a, u32 v)
  * before. GCC: one small function per size, not the test inlined at every
  * store site -- that grew execute_arm by ~3 KB and overflowed ITCM. */
 #define work_ram_store(size, _a, v)                                           \
-  cpu_alert |= cpu_store##size(_a, v)                                         \
+  CPU_ALERT_OR(cpu_store##size(_a, v))                                        \
 
 #define fast_write_memory(size, type, address, value)                         \
 {                                                                             \
@@ -1752,6 +1770,36 @@ u16 io_registers[512];
 static const u16 arm_cond_pass[16] = {
   0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555, 0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
 };
+
+/* The end of every Thumb handler (threaded dispatch, see thumb_tbl): the
+ * cycle charge, the idle head, the cycles left (an alert is folded in:
+ * CPU_ALERT_OR), then -- the PC still on the fetched page and even -- the
+ * next opcode and the jump to its handler; anything else goes the slow way
+ * through thumb_loop_pc. Host debug builds that hook the fetch (PC
+ * histogram, M4A instruction count) take the shared copy. */
+#if defined(GBA_PCHIST) || defined(M4A_COUNT_INSNS) || defined(TRACE_INSTRUCTIONS)
+#define THUMB_NEXT() goto thumb_post
+#else
+#ifdef GBA_ICOUNT
+#define THUMB_ICOUNT() gba_icount++
+#else
+#define THUMB_ICOUNT()
+#endif
+#define THUMB_NEXT()                                                          \
+  {                                                                           \
+    PC_CHECK();                                                               \
+    cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][0];                      \
+    THUMB_ICOUNT();                                                           \
+    if (__builtin_expect(pc == idle_pc, 0))                                   \
+      goto thumb_idle;                                                        \
+    if (__builtin_expect(cycles_remaining <= 0, 0))                           \
+      goto thumb_out;                                                         \
+    if (__builtin_expect(((pc >> 15) != pc_region) | (pc & 1), 0))            \
+      goto thumb_loop_pc;                                                     \
+    opcode = readaddress16(pc_address_block, (pc & 0x7FFF));                  \
+    goto *thumb_tbl[opcode >> 8];                                             \
+  }
+#endif
 
 void execute_arm(u32 cycles)
 {
@@ -3217,149 +3265,149 @@ arm_loop_pc:
           /* STM instructions: STMDA, STMIA, STMDB, STMIB */
 
           case 0x80:   /* STMDA rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, false, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x88:   /* STMIA rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, false, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x90:   /* STMDB rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, false, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x98:   /* STMIB rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, false, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
 
           case 0x82:   /* STMDA rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, false, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x8A:   /* STMIA rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, false, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x92:   /* STMDB rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, false, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x9A:   /* STMIB rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, false, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
 
           case 0x84:   /* STMDA rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, true, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x8C:   /* STMIA rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, true, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x94:   /* STMDB rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, true, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x9C:   /* STMIB rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, false, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, false, true, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
 
           case 0x86:   /* STMDA rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, true, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x8E:   /* STMIA rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, true, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x96:   /* STMDB rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, true, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x9E:   /* STMIB rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccStore, true, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccStore, true, true, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
 
 
           /* LDM instructions: LDMDA, LDMIA, LDMDB, LDMIB */
 
           case 0x81:   /* LDMDA rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, false, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x89:   /* LDMIA rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, false, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x91:   /* LDMDB rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, false, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x99:   /* LDMIB rn, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, false, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
 
           case 0x83:   /* LDMDA rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, false, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x8B:   /* LDMIA rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, false, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x93:   /* LDMDB rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, false, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
           case 0x9B:   /* LDMIB rn!, rlist */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, false, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, false, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             break;
 
           case 0x85:   /* LDMDA rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, true, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x8D:   /* LDMIA rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, true, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x95:   /* LDMDB rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, true, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x9D:   /* LDMIB rn, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, false, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, false, true, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
 
           case 0x87:   /* LDMDA rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPostDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, true, AddrPostDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x8F:   /* LDMIA rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPostInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, true, AddrPostInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x97:   /* LDMDB rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPreDec>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, true, AddrPreDec>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
           case 0x9F:   /* LDMIB rn!, rlist^ */
-            cpu_alert |= exec_arm_block_mem<AccLoad, true, true, AddrPreInc>(
-              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining); pc = reg[REG_PC];
+            CPU_ALERT_OR(exec_arm_block_mem<AccLoad, true, true, AddrPreInc>(
+              (opcode >> 16) & 0x0F, opcode & 0xFFFF, cycles_remaining)); pc = reg[REG_PC];
             arm_spsr_restore_ldm_check();
             break;
 
@@ -3508,68 +3556,114 @@ thumb_loop_pc:
        interp_trace_instruction(reg[REG_PC], 0);
        #endif
 
+       /* Threaded Thumb dispatch: every handler ends with THUMB_NEXT(), its
+        * own copy of the post-instruction work, fetch and jump through
+        * thumb_tbl (opcode >> 8 -> the case's label) -- no shared loop, no
+        * range check, one indirect jump per instruction instead of two
+        * branches and a table jump. A value no case matches goes to
+        * thumb_post, as gpSP's switch fell through to it. The switch below
+        * is entered only through the table. */
+#ifndef HOST_BUILD
+       /* in ITCM (ld/gba_core.ld .gba_itcm_rodata): RAM_EMU has no room */
+       __attribute__((section(".gba_itcm_rodata")))
+#endif
+       static const void *const thumb_tbl[256] = {
+        &&thl_0, &&thl_0, &&thl_0, &&thl_0, &&thl_0, &&thl_0, &&thl_0, &&thl_0,
+        &&thl_1, &&thl_1, &&thl_1, &&thl_1, &&thl_1, &&thl_1, &&thl_1, &&thl_1,
+        &&thl_2, &&thl_2, &&thl_2, &&thl_2, &&thl_2, &&thl_2, &&thl_2, &&thl_2,
+        &&thl_3, &&thl_4, &&thl_5, &&thl_6, &&thl_7, &&thl_8, &&thl_9, &&thl_10,
+        &&thl_11, &&thl_11, &&thl_11, &&thl_11, &&thl_11, &&thl_11, &&thl_11, &&thl_11,
+        &&thl_12, &&thl_12, &&thl_12, &&thl_12, &&thl_12, &&thl_12, &&thl_12, &&thl_12,
+        &&thl_13, &&thl_13, &&thl_13, &&thl_13, &&thl_13, &&thl_13, &&thl_13, &&thl_13,
+        &&thl_14, &&thl_14, &&thl_14, &&thl_14, &&thl_14, &&thl_14, &&thl_14, &&thl_14,
+        &&thl_15, &&thl_16, &&thl_17, &&thl_18, &&thl_19, &&thl_20, &&thl_21, &&thl_22,
+        &&thl_23, &&thl_23, &&thl_23, &&thl_23, &&thl_23, &&thl_23, &&thl_23, &&thl_23,
+        &&thl_24, &&thl_25, &&thl_26, &&thl_27, &&thl_28, &&thl_29, &&thl_30, &&thl_31,
+        &&thl_32, &&thl_33, &&thl_34, &&thl_35, &&thl_36, &&thl_37, &&thl_38, &&thl_39,
+        &&thl_40, &&thl_40, &&thl_40, &&thl_40, &&thl_40, &&thl_40, &&thl_40, &&thl_40,
+        &&thl_41, &&thl_41, &&thl_41, &&thl_41, &&thl_41, &&thl_41, &&thl_41, &&thl_41,
+        &&thl_42, &&thl_42, &&thl_42, &&thl_42, &&thl_42, &&thl_42, &&thl_42, &&thl_42,
+        &&thl_43, &&thl_43, &&thl_43, &&thl_43, &&thl_43, &&thl_43, &&thl_43, &&thl_43,
+        &&thl_44, &&thl_44, &&thl_44, &&thl_44, &&thl_44, &&thl_44, &&thl_44, &&thl_44,
+        &&thl_45, &&thl_45, &&thl_45, &&thl_45, &&thl_45, &&thl_45, &&thl_45, &&thl_45,
+        &&thl_46, &&thl_46, &&thl_46, &&thl_46, &&thl_46, &&thl_46, &&thl_46, &&thl_46,
+        &&thl_47, &&thl_47, &&thl_47, &&thl_47, &&thl_47, &&thl_47, &&thl_47, &&thl_47,
+        &&thl_48, &&thl_48, &&thl_48, &&thl_48, &&thl_48, &&thl_48, &&thl_48, &&thl_48,
+        &&thl_49, &&thl_49, &&thl_49, &&thl_49, &&thl_49, &&thl_49, &&thl_49, &&thl_49,
+        &&thl_50, &&thl_51, &&thl_52, &&thl_53, &&thl_54, &&thl_55, &&thumb_post, &&thumb_post,
+        &&thumb_post, &&thumb_post, &&thumb_post, &&thumb_post, &&thl_56, &&thl_57, &&thumb_post, &&thumb_post,
+        &&thl_58, &&thl_58, &&thl_58, &&thl_58, &&thl_58, &&thl_58, &&thl_58, &&thl_58,
+        &&thl_59, &&thl_59, &&thl_59, &&thl_59, &&thl_59, &&thl_59, &&thl_59, &&thl_59,
+        &&thl_60, &&thl_61, &&thl_62, &&thl_63, &&thl_64, &&thl_65, &&thl_66, &&thl_67,
+        &&thl_68, &&thl_69, &&thl_70, &&thl_71, &&thl_72, &&thl_73, &&thumb_post, &&thl_74,
+        &&thl_75, &&thl_75, &&thl_75, &&thl_75, &&thl_75, &&thl_75, &&thl_75, &&thl_75,
+        &&thumb_post, &&thumb_post, &&thumb_post, &&thumb_post, &&thumb_post, &&thumb_post, &&thumb_post, &&thumb_post,
+        &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76, &&thl_76,
+        &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77, &&thl_77,
+       };
+       goto *thumb_tbl[(opcode >> 8) & 0xFF];
        switch((opcode >> 8) & 0xFF)
        {
-          case 0x00 ... 0x07:
+          case 0x00 ... 0x07: thl_0:
              /* LSL rd, rs, offset */
              thumb_shift(shift, lsl, imm);
-             break;
+             THUMB_NEXT();
 
-          case 0x08 ... 0x0F:
+          case 0x08 ... 0x0F: thl_1:
              /* LSR rd, rs, offset */
              thumb_shift(shift, lsr, imm);
-             break;
+             THUMB_NEXT();
 
-          case 0x10 ... 0x17:
+          case 0x10 ... 0x17: thl_2:
              /* ASR rd, rs, offset */
              thumb_shift(shift, asr, imm);
-             break;
+             THUMB_NEXT();
 
-          case 0x18:
-          case 0x19:
+          case 0x18: thl_3:
+          case 0x19: thl_4:
              /* ADD rd, rs, rn */
              thumb_add(add_sub, rd, reg[rs], reg[rn], 0);
-             break;
+             THUMB_NEXT();
 
-          case 0x1A:
-          case 0x1B:
+          case 0x1A: thl_5:
+          case 0x1B: thl_6:
              /* SUB rd, rs, rn */
              thumb_sub(add_sub, rd, reg[rs], reg[rn], 1);
-             break;
+             THUMB_NEXT();
 
-          case 0x1C:
-          case 0x1D:
+          case 0x1C: thl_7:
+          case 0x1D: thl_8:
              /* ADD rd, rs, imm */
              thumb_add(add_sub_imm, rd, reg[rs], imm, 0);
-             break;
+             THUMB_NEXT();
 
-          case 0x1E:
-          case 0x1F:
+          case 0x1E: thl_9:
+          case 0x1F: thl_10:
              /* SUB rd, rs, imm */
              thumb_sub(add_sub_imm, rd, reg[rs], imm, 1);
-             break;
+             THUMB_NEXT();
 
-          case 0x20 ... 0x27:
+          case 0x20 ... 0x27: thl_11:
              /* MOV r0..7, imm */
              thumb_logic(imm, ((opcode >> 8) & 7), imm);
-             break;
+             THUMB_NEXT();
 
-          case 0x28 ... 0x2F:
+          case 0x28 ... 0x2F: thl_12:
              /* CMP r0..7, imm */
              thumb_test_sub(imm, reg[(opcode >> 8) & 7], imm);
-             break;
+             THUMB_NEXT();
 
-          case 0x30 ... 0x37:
+          case 0x30 ... 0x37: thl_13:
              /* ADD r0..7, imm */
              thumb_add(imm, ((opcode >> 8) & 7), reg[(opcode >> 8) & 7], imm, 0);
-             break;
+             THUMB_NEXT();
 
-          case 0x38 ... 0x3F:
+          case 0x38 ... 0x3F: thl_14:
              /* SUB r0..7, imm */
              thumb_sub(imm, ((opcode >> 8) & 7), reg[(opcode >> 8) & 7], imm, 1);
-             break;
+             THUMB_NEXT();
 
-          case 0x40:
+          case 0x40: thl_15:
              switch((opcode >> 6) & 0x03)
              {
                 case 0x00:
@@ -3592,9 +3686,9 @@ thumb_loop_pc:
                    thumb_shift(alu_op, lsr, reg);
                    break;
              }
-             break;
+             THUMB_NEXT();
 
-          case 0x41:
+          case 0x41: thl_16:
              switch((opcode >> 6) & 0x03)
              {
                 case 0x00:
@@ -3617,9 +3711,9 @@ thumb_loop_pc:
                    thumb_shift(alu_op, ror, reg);
                    break;
              }
-             break;
+             THUMB_NEXT();
 
-          case 0x42:
+          case 0x42: thl_17:
              switch((opcode >> 6) & 0x03)
              {
                 case 0x00:
@@ -3642,9 +3736,9 @@ thumb_loop_pc:
                    thumb_test_add(alu_op, reg[rd], reg[rs]);
                    break;
              }
-             break;
+             THUMB_NEXT();
 
-          case 0x43:
+          case 0x43: thl_18:
              switch((opcode >> 6) & 0x03)
              {
                 case 0x00:
@@ -3667,14 +3761,14 @@ thumb_loop_pc:
                    thumb_logic(alu_op, rd, ~reg[rs]);
                    break;
              }
-             break;
+             THUMB_NEXT();
 
-          case 0x44:
+          case 0x44: thl_19:
              /* ADD rd, rs */
              thumb_hireg_op(reg[rd] + reg[rs]);
-             break;
+             THUMB_NEXT();
 
-          case 0x45:
+          case 0x45: thl_20:
              /* CMP rd, rs */
              {
                 thumb_pc_offset(4);
@@ -3685,14 +3779,14 @@ thumb_loop_pc:
                 thumb_pc_offset(-2);
                 calculate_flags_sub(dest, _sa, _sb, 1);
              }
-             break;
+             THUMB_NEXT();
 
-          case 0x46:
+          case 0x46: thl_21:
              /* MOV rd, rs */
              thumb_hireg_op(reg[rs]);
-             break;
+             THUMB_NEXT();
 
-          case 0x47:
+          case 0x47: thl_22:
              /* BX rs */
              {
                 thumb_decode_hireg_op();
@@ -3714,115 +3808,115 @@ thumb_loop_pc:
                    goto arm_loop;
                 }
              }
-             break;
+             THUMB_NEXT();
 
-          case 0x48 ... 0x4F:
+          case 0x48 ... 0x4F: thl_23:
              /* LDR r0..7, [pc + imm] */
              thumb_access_memory(load, imm, ((pc - 2) & ~2) + (imm * 4) + 4, reg[(opcode >> 8) & 7], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0x50:
-          case 0x51:
+          case 0x50: thl_24:
+          case 0x51: thl_25:
              /* STR rd, [rb + ro] */
              thumb_access_memory(store, mem_reg, reg[rb] + reg[ro], reg[rd], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0x52:
-          case 0x53:
+          case 0x52: thl_26:
+          case 0x53: thl_27:
              /* STRH rd, [rb + ro] */
              thumb_access_memory(store, mem_reg, reg[rb] + reg[ro], reg[rd], u16);
-             break;
+             THUMB_NEXT();
 
-          case 0x54:
-          case 0x55:
+          case 0x54: thl_28:
+          case 0x55: thl_29:
              /* STRB rd, [rb + ro] */
              thumb_access_memory(store, mem_reg, reg[rb] + reg[ro], reg[rd], u8);
-             break;
+             THUMB_NEXT();
 
-          case 0x56:
-          case 0x57:
+          case 0x56: thl_30:
+          case 0x57: thl_31:
              /* LDSB rd, [rb + ro] */
              thumb_access_memory(load, mem_reg, reg[rb] + reg[ro], reg[rd], s8);
-             break;
+             THUMB_NEXT();
 
-          case 0x58:
-          case 0x59:
+          case 0x58: thl_32:
+          case 0x59: thl_33:
              /* LDR rd, [rb + ro] */
              thumb_access_memory(load, mem_reg, reg[rb] + reg[ro], reg[rd], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0x5A:
-          case 0x5B:
+          case 0x5A: thl_34:
+          case 0x5B: thl_35:
              /* LDRH rd, [rb + ro] */
              thumb_access_memory(load, mem_reg, reg[rb] + reg[ro], reg[rd], u16);
-             break;
+             THUMB_NEXT();
 
-          case 0x5C:
-          case 0x5D:
+          case 0x5C: thl_36:
+          case 0x5D: thl_37:
              /* LDRB rd, [rb + ro] */
              thumb_access_memory(load, mem_reg, reg[rb] + reg[ro], reg[rd], u8);
-             break;
+             THUMB_NEXT();
 
-          case 0x5E:
-          case 0x5F:
+          case 0x5E: thl_38:
+          case 0x5F: thl_39:
              /* LDSH rd, [rb + ro] */
              thumb_access_memory(load, mem_reg, reg[rb] + reg[ro], reg[rd], s16);
-             break;
+             THUMB_NEXT();
 
-          case 0x60 ... 0x67:
+          case 0x60 ... 0x67: thl_40:
              /* STR rd, [rb + imm] */
              thumb_access_memory(store, mem_imm, reg[rb] + (imm * 4), reg[rd], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0x68 ... 0x6F:
+          case 0x68 ... 0x6F: thl_41:
              /* LDR rd, [rb + imm] */
              thumb_access_memory(load, mem_imm, reg[rb] + (imm * 4), reg[rd], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0x70 ... 0x77:
+          case 0x70 ... 0x77: thl_42:
              /* STRB rd, [rb + imm] */
              thumb_access_memory(store, mem_imm, reg[rb] + imm, reg[rd], u8);
-             break;
+             THUMB_NEXT();
 
-          case 0x78 ... 0x7F:
+          case 0x78 ... 0x7F: thl_43:
              /* LDRB rd, [rb + imm] */
              thumb_access_memory(load, mem_imm, reg[rb] + imm, reg[rd], u8);
-             break;
+             THUMB_NEXT();
 
-          case 0x80 ... 0x87:
+          case 0x80 ... 0x87: thl_44:
              /* STRH rd, [rb + imm] */
              thumb_access_memory(store, mem_imm, reg[rb] + (imm * 2), reg[rd], u16);
-             break;
+             THUMB_NEXT();
 
-          case 0x88 ... 0x8F:
+          case 0x88 ... 0x8F: thl_45:
              /* LDRH rd, [rb + imm] */
              thumb_access_memory(load, mem_imm, reg[rb] + (imm * 2), reg[rd], u16);
-             break;
+             THUMB_NEXT();
 
-          case 0x90 ... 0x97:
+          case 0x90 ... 0x97: thl_46:
              /* STR r0..7, [sp + imm] */
              thumb_access_memory(store, imm, reg[REG_SP] + (imm * 4), reg[(opcode >> 8) & 7], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0x98 ... 0x9F:
+          case 0x98 ... 0x9F: thl_47:
              /* LDR r0..7, [sp + imm] */
              thumb_access_memory(load, imm, reg[REG_SP] + (imm * 4), reg[(opcode >> 8) & 7], u32);
-             break;
+             THUMB_NEXT();
 
-          case 0xA0 ... 0xA7:
+          case 0xA0 ... 0xA7: thl_48:
              /* ADD r0..7, pc, +imm */
              thumb_add_noflags(imm, ((opcode >> 8) & 7), (pc & ~2) + 4, (imm * 4));
-             break;
+             THUMB_NEXT();
 
-          case 0xA8 ... 0xAF:
+          case 0xA8 ... 0xAF: thl_49:
              /* ADD r0..7, sp, +imm */
              thumb_add_noflags(imm, ((opcode >> 8) & 7), reg[REG_SP], (imm * 4));
-             break;
+             THUMB_NEXT();
 
-          case 0xB0:
-          case 0xB1:
-          case 0xB2:
-          case 0xB3:
+          case 0xB0: thl_50:
+          case 0xB1: thl_51:
+          case 0xB2: thl_52:
+          case 0xB3: thl_53:
              if((opcode >> 7) & 0x01)
              {
                 /* ADD sp, -imm */
@@ -3833,82 +3927,82 @@ thumb_loop_pc:
                 /* ADD sp, +imm */
                 thumb_add_noflags(add_sp, 13, reg[REG_SP], (imm * 4));
              }
-             break;
+             THUMB_NEXT();
 
-          case 0xB4:  /* PUSH rlist */
-             cpu_alert |= exec_thumb_block_mem<AccStore, AddrPreDec>(
-               REG_SP, opcode & 0xFF, cycles_remaining); pc = reg[REG_PC];
-             break;
+          case 0xB4: thl_54:  /* PUSH rlist */
+             CPU_ALERT_OR(exec_thumb_block_mem<AccStore, AddrPreDec>(
+               REG_SP, opcode & 0xFF, cycles_remaining)); pc = reg[REG_PC];
+             THUMB_NEXT();
 
-          case 0xB5:  /* PUSH rlist, lr */
-             cpu_alert |= exec_thumb_block_mem<AccStore, AddrPreDec>(
-               REG_SP, (opcode & 0xFF) | (1 << REG_LR), cycles_remaining); pc = reg[REG_PC];
-             break;
+          case 0xB5: thl_55:  /* PUSH rlist, lr */
+             CPU_ALERT_OR(exec_thumb_block_mem<AccStore, AddrPreDec>(
+               REG_SP, (opcode & 0xFF) | (1 << REG_LR), cycles_remaining)); pc = reg[REG_PC];
+             THUMB_NEXT();
 
-          case 0xBC:  /* POP rlist */
-             cpu_alert |= exec_thumb_block_mem<AccLoad, AddrPostInc>(
-               REG_SP, opcode & 0xFF, cycles_remaining); pc = reg[REG_PC];
-             break;
+          case 0xBC: thl_56:  /* POP rlist */
+             CPU_ALERT_OR(exec_thumb_block_mem<AccLoad, AddrPostInc>(
+               REG_SP, opcode & 0xFF, cycles_remaining)); pc = reg[REG_PC];
+             THUMB_NEXT();
 
-          case 0xBD:  /* POP rlist, pc */
-             cpu_alert |= exec_thumb_block_mem<AccLoad, AddrPostInc>(
-               REG_SP, (opcode & 0xFF) | (1 << REG_PC), cycles_remaining); pc = reg[REG_PC];
-             break;
+          case 0xBD: thl_57:  /* POP rlist, pc */
+             CPU_ALERT_OR(exec_thumb_block_mem<AccLoad, AddrPostInc>(
+               REG_SP, (opcode & 0xFF) | (1 << REG_PC), cycles_remaining)); pc = reg[REG_PC];
+             THUMB_NEXT();
 
-          case 0xC0 ... 0xC7:    /* STMIA r0..7!, rlist */
-             cpu_alert |= exec_thumb_block_mem<AccStore, AddrPostInc>(
-               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining); pc = reg[REG_PC];
-             break;
+          case 0xC0 ... 0xC7: thl_58:    /* STMIA r0..7!, rlist */
+             CPU_ALERT_OR(exec_thumb_block_mem<AccStore, AddrPostInc>(
+               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining)); pc = reg[REG_PC];
+             THUMB_NEXT();
 
-          case 0xC8 ... 0xCF:    /* LDMIA r0..7!, rlist */
-             cpu_alert |= exec_thumb_block_mem<AccLoad, AddrPostInc>(
-               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining); pc = reg[REG_PC];
-             break;
+          case 0xC8 ... 0xCF: thl_59:    /* LDMIA r0..7!, rlist */
+             CPU_ALERT_OR(exec_thumb_block_mem<AccLoad, AddrPostInc>(
+               (opcode >> 8) & 7, (opcode & 0xFF), cycles_remaining)); pc = reg[REG_PC];
+             THUMB_NEXT();
 
-          case 0xD0:   /* BEQ label */
+          case 0xD0: thl_60:   /* BEQ label */
              thumb_conditional_branch(z_flag == 1);
-             break;
-          case 0xD1:   /* BNE label */
+             THUMB_NEXT();
+          case 0xD1: thl_61:   /* BNE label */
              thumb_conditional_branch(z_flag == 0);
-             break;
-          case 0xD2:   /* BCS label */
+             THUMB_NEXT();
+          case 0xD2: thl_62:   /* BCS label */
              thumb_conditional_branch(c_flag == 1);
-             break;
-          case 0xD3:   /* BCC label */
+             THUMB_NEXT();
+          case 0xD3: thl_63:   /* BCC label */
              thumb_conditional_branch(c_flag == 0);
-             break;
-          case 0xD4:   /* BMI label */
+             THUMB_NEXT();
+          case 0xD4: thl_64:   /* BMI label */
              thumb_conditional_branch(n_flag == 1);
-             break;
-          case 0xD5:   /* BPL label */
+             THUMB_NEXT();
+          case 0xD5: thl_65:   /* BPL label */
              thumb_conditional_branch(n_flag == 0);
-             break;
-          case 0xD6:   /* BVS label */
+             THUMB_NEXT();
+          case 0xD6: thl_66:   /* BVS label */
              thumb_conditional_branch(v_flag == 1);
-             break;
-          case 0xD7:   /* BVC label */
+             THUMB_NEXT();
+          case 0xD7: thl_67:   /* BVC label */
              thumb_conditional_branch(v_flag == 0);
-             break;
-          case 0xD8:   /* BHI label */
+             THUMB_NEXT();
+          case 0xD8: thl_68:   /* BHI label */
              thumb_conditional_branch(c_flag & (z_flag ^ 1));
-             break;
-          case 0xD9:   /* BLS label */
+             THUMB_NEXT();
+          case 0xD9: thl_69:   /* BLS label */
              thumb_conditional_branch((c_flag == 0) | z_flag);
-             break;
-          case 0xDA:   /* BGE label */
+             THUMB_NEXT();
+          case 0xDA: thl_70:   /* BGE label */
              thumb_conditional_branch(n_flag == v_flag);
-             break;
-          case 0xDB:   /* BLT label */
+             THUMB_NEXT();
+          case 0xDB: thl_71:   /* BLT label */
              thumb_conditional_branch(n_flag != v_flag);
-             break;
-          case 0xDC:   /* BGT label */
+             THUMB_NEXT();
+          case 0xDC: thl_72:   /* BGT label */
              thumb_conditional_branch((z_flag == 0) & (n_flag == v_flag));
-             break;
-          case 0xDD:   /* BLE label */
+             THUMB_NEXT();
+          case 0xDD: thl_73:   /* BLE label */
              thumb_conditional_branch(z_flag | (n_flag != v_flag));
-             break;
+             THUMB_NEXT();
 
-          case 0xDF:
+          case 0xDF: thl_74:
              collapse_flags();
 #ifdef GBA_BIOS_HLE
              {
@@ -3917,7 +4011,7 @@ thumb_loop_pc:
                  reg[REG_PC] += 2;
                  pc = reg[REG_PC];
                  gba_bios_hle_charge(bios_cost);
-                 break;
+                 THUMB_NEXT();
                }
              }
 #endif
@@ -3929,28 +4023,28 @@ thumb_loop_pc:
              set_cpu_mode(MODE_SUPERVISOR);
              reg[REG_BUS_VALUE] = 0xe3a02004;  // After SWI, we read bios[0xE4]
              goto arm_loop;
-             break;
+             THUMB_NEXT();
 
-          case 0xE0 ... 0xE7:
+          case 0xE0 ... 0xE7: thl_75:
              {
                 /* B label */
                 thumb_decode_branch();
                 s32 br_offset = ((s32)(offset << 21) >> 20) + 4;
                 thumb_pc_offset(br_offset);
                 cycles_remaining -= ws_cyc_nseq[pc >> 24][0];
-                break;
+                THUMB_NEXT();
              }
 
-          case 0xF0 ... 0xF7:
+          case 0xF0 ... 0xF7: thl_76:
              {
                 /* (low word) BL label */
                 thumb_decode_branch();
                 reg[REG_LR] = pc + 4 + ((s32)(offset << 21) >> 9);
                 thumb_pc_offset(2);
-                break;
+                THUMB_NEXT();
              }
 
-          case 0xF8 ... 0xFF:
+          case 0xF8 ... 0xFF: thl_77:
              {
                 /* (high word) BL label */
                 thumb_decode_branch();
@@ -3959,36 +4053,48 @@ thumb_loop_pc:
                 reg[REG_LR] = newlr;
                 reg[REG_PC] = pc = newpc;
                 cycles_remaining -= ws_cyc_nseq[newpc >> 24][0];
-                break;
+                THUMB_NEXT();
              }
        }
 
-       /* End of Execute THUMB instruction */
+       /* End of Execute THUMB instruction: the shared copy of THUMB_NEXT,
+        * for the handlers that leave the switch with a plain break (inside
+        * nested blocks) and for opcodes no case matches. */
+thumb_post:
        PC_CHECK();
        cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][0];
-
 #ifdef GBA_ICOUNT
        gba_icount++;
 #endif
-       /* Same conditional-skip semantic as the ARM side above (after every
-        * instruction: one compare, and no M4A hook in Thumb). */
-       if (pc == idle_pc) {
+       if (__builtin_expect(pc == idle_pc, 0))
+          goto thumb_idle;
+thumb_after_idle:
+       if (cycles_remaining > 0)
+          goto thumb_loop_pc;   /* the back edge: pc is already the new PC */
+       goto thumb_out;
+
+thumb_idle:
+       /* Same conditional-skip semantic as the ARM side (after every
+        * instruction: one compare, and no M4A hook in Thumb). An alert
+        * raised by this instruction has biased the count (CPU_ALERT_OR): the
+        * skip sees the real one. */
+       {
+          const s32 bias = (cpu_alert & ALERT_STOP) ? ALERT_BIAS : 0;
           if (idle_loop_cond == IDLE_COND_GENERIC) {
-             cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
+             cycles_remaining = gba_idle_head(cycles_remaining + bias, n_flag, z_flag, c_flag, v_flag) - bias;
              idle_pc = idle_loop_target_pc;
           }
           else if (idle_loop_cond == IDLE_COND_CHEAT)
              process_cheats();     /* about to execute the cheat hook */
-          else if (cycles_remaining > 0 &&
+          else if (cycles_remaining + bias > 0 &&
                    (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0))
-             cycles_remaining = 0;
+             cycles_remaining = -bias;
        }
+       goto thumb_after_idle;
 
-       if (cpu_alert & (CPU_ALERT_HALT | CPU_ALERT_IRQ))
+thumb_out:
+       if (cpu_alert & ALERT_STOP)
           goto alert;
-
-       if (cycles_remaining > 0)
-          goto thumb_loop_pc;   /* the back edge: pc is already the new PC */
     } while(0);
 
     collapse_flags();
@@ -4002,6 +4108,8 @@ thumb_loop_pc:
 
     alert:
       /* CPU stopped or switch to IRQ handler */
+      if (cpu_alert & ALERT_STOP)
+        cycles_remaining += ALERT_BIAS;     /* see CPU_ALERT_OR */
       collapse_flags();
   }
 }

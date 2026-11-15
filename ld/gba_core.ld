@@ -142,6 +142,11 @@ SECTIONS
     build/video.o (.text._Z20render_scanline_objsItL8rendtype0EEvjjjPvPKt*)
     build/video.o (.text._Z18tile_render_layers*)
     build/m4a_hle.o (.text.rd_* .text.wr_* .text.win_hold)
+    /* Read-only tables the interpreter reads every instruction: the
+     * threaded Thumb dispatch's label table (ITCM serves data reads too,
+     * and RAM_EMU has no room). */
+    . = ALIGN(4);
+    *(.gba_itcm_rodata*)
     . = ALIGN(4);
     __CORE_ITCM_CODE_END__ = .;
   } >ITCM

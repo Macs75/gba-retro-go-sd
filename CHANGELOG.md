@@ -108,6 +108,12 @@ attached to the release:
   inline it, the 26 other ARM forms call one copy. ITCM free: 840 B ->
   12.6 KB. Device, Tony Hawk's Underground: interpreter cost unchanged,
   5,200 -> 5,264 pictures shown of 5,640, frames over budget 2,359 -> 1,981.
+- Interpreter: the cycle count and the four flags stay in registers (no
+  local's address escapes any more), and Thumb uses threaded dispatch:
+  every handler ends with its own fetch and jump through a label table in
+  ITCM; an alert is folded into the cycle count instead of being tested
+  after every Thumb instruction. Device, Tony Hawk's Underground: -3%
+  interpreter cycles.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial
