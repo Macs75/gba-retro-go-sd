@@ -1682,10 +1682,37 @@ const m4a_variant *m4a_identify(const uint8_t *code, uint32_t len)
 const m4a_variant *m4a_scan(const uint8_t *mem, uint32_t len, uint32_t base_addr,
                             uint32_t *out_pc)
 {
-    uint32_t off;
+    uint32_t off, first[8];
+    int i, nv = 0;
+    /* A game without the m4a mixer is scanned every frame up to the scan's
+     * frame limit (m4a_gpsp.c): 8192 offsets, each a memcmp per variant, cost
+     * the device ~2M cycles a frame. So an offset gets the full compare only
+     * when its first word is some variant's first word (today all share
+     * one) -- the same answer, since a full match starts with that word. */
+    for (i = 0; m4a_variants[i]; i++) {
+        int j;
+        uint32_t w;
+        memcpy(&w, m4a_variants[i]->code, 4);
+        for (j = 0; j < nv && first[j] != w; j++)
+            ;
+        if (j == nv) {
+            if (nv == 8) {              /* too many distinct: no filter */
+                nv = -1;
+                break;
+            }
+            first[nv++] = w;
+        }
+    }
     /* ARM code, word-aligned wherever a game chooses to put it. */
     for (off = 0; off + 4u <= len; off += 4u) {
-        const m4a_variant *v = m4a_identify(mem + off, len - off);
+        const m4a_variant *v;
+        uint32_t w;
+        memcpy(&w, mem + off, 4);
+        for (i = 0; i < nv && w != first[i]; i++)
+            ;
+        if (i == nv)
+            continue;
+        v = m4a_identify(mem + off, len - off);
         if (v) {
             if (out_pc)
                 *out_pc = base_addr + off;

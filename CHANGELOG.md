@@ -145,6 +145,12 @@ attached to the release:
 
 ### Fixed
 
+- Games without the M4A sound driver spent ~2M cycles a frame (a third of
+  the frame) for their first 600 frames on the search for its mixer: a
+  memcmp per variant at each of 8,192 IWRAM offsets. An offset now gets the
+  full compare only when its first word matches (all variants share it):
+  same result. Device, Tony Hawk's Underground: 200 -> 0 frames skipped in
+  the first 10 seconds.
 - The generic poll-loop skip lost real poll loops that shared a 64-byte
   block with rejected code: rejected loops are now remembered by their head,
   and a rejected block is decoded again at every 16th event pair. 18 of the
