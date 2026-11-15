@@ -739,7 +739,7 @@ bool sound_check_savestate(const u8 *src)
 }
 
 
-bool sound_read_savestate(const u8 *src)
+GBA_COLD bool sound_read_savestate(const u8 *src)
 {
   int i;
   const u8 *snddoc = bson_find_key(src, "sound");
@@ -823,7 +823,7 @@ bool sound_read_savestate(const u8 *src)
   return true;
 }
 
-unsigned sound_write_savestate(u8 *dst)
+GBA_COLD unsigned sound_write_savestate(u8 *dst)
 {
   int i;
   u8 *wbptr, *startp = dst;

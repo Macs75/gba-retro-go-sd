@@ -127,6 +127,11 @@ attached to the release:
   minute of a 150-game set). Same pictures, frame by frame, in 10 games.
   Device: Tony Hawk's Underground drawing -20%, Kirby & The Amazing Mirror
   -13%; Tony's blended menu a further -12% per drawn frame.
+- The blended screens' sprite renderers and the window/effects driver run
+  from RAM instead of the flash: -12 to -17% drawing per drawn frame in
+  Tony Hawk's blended menu, 3 of its 5 windows no longer skip frames. The
+  room came from moving the load-time and savestate code (game load,
+  memory setup, the memory/sound/main savestate parts) to the flash.
 - Code and data placement is pinned where the device measured it best:
   the code after the interpreter in ITCM (mod 32), the hot RAM drawing code
   (mod 8 KB, the I-cache's set span), the flash read-only data and the GBA

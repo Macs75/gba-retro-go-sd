@@ -361,7 +361,7 @@ void print_regs(void)
 }
 #endif
 
-bool main_check_savestate(const u8 *src)
+GBA_COLD bool main_check_savestate(const u8 *src)
 {
   int i;
   const u8 *p1 = bson_find_key(src, "emu");
@@ -398,7 +398,7 @@ bool main_check_savestate(const u8 *src)
   return true;
 }
 
-bool main_read_savestate(const u8 *src)
+GBA_COLD bool main_read_savestate(const u8 *src)
 {
   int i;
   const u8 *p1 = bson_find_key(src, "emu");
@@ -458,7 +458,7 @@ bool main_read_savestate(const u8 *src)
   return true;
 }
 
-unsigned main_write_savestate(u8* dst)
+GBA_COLD unsigned main_write_savestate(u8* dst)
 {
   int i;
   u8 *wbptr, *wbptr2, *startp = dst;

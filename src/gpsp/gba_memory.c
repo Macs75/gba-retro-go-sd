@@ -2388,7 +2388,7 @@ bool gamepak_must_swap(void)
   return gamepak_buffer_count * gamepak_buffer_blocksize < gamepak_size;
 }
 
-void init_memory(void)
+GBA_COLD void init_memory(void)
 {
   u32 map_offset = 0, i;
 
@@ -2526,7 +2526,7 @@ static bool memory_check_savestate_common(const u8 *src, bool with_bulk)
 }
 
 
-static bool memory_read_savestate_common(const u8 *src, bool with_bulk)
+GBA_COLD static bool memory_read_savestate_common(const u8 *src, bool with_bulk)
 {
   int i;
   u32 rtc_data_array[2];
@@ -2628,7 +2628,7 @@ const gba_bulk_region_t *gba_bulk_regions(unsigned *count)
   return bulk_regions;
 }
 
-static unsigned memory_write_savestate_common(u8 *dst, bool with_bulk)
+GBA_COLD static unsigned memory_write_savestate_common(u8 *dst, bool with_bulk)
 {
   int i;
   u8 *wbptr, *wbptr2, *startp = dst;
@@ -3050,7 +3050,7 @@ static void detect_backup_subcircuit(const u8 *rom, u32 rom_size)
   }
 }
 
-u32 load_gamepak(const struct retro_game_info* info, const char *name,
+GBA_COLD u32 load_gamepak(const struct retro_game_info* info, const char *name,
                  int force_rtc, int force_rumble, int force_serial)
 {
    char game_code[5] = {0,0,0,0,0};

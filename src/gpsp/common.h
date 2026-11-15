@@ -106,6 +106,17 @@
     (((value & 0x1F) << 11) | ((value & 0x03E0) << 1) | ((value >> 10) & 0x1F))
 #endif
 
+/* Code that runs only at power-on, at game load or for a savestate goes to
+ * the XIP flash (ld/gba_core.ld .xip_gba), leaving RAM_EMU to hot code. Only
+ * for code that runs after gba.xip is cached (main_gba.c, before
+ * init_memory) and that the firmware never calls back with the flash
+ * unmapped. */
+#ifndef HOST_BUILD
+#define GBA_COLD __attribute__((section(".gba_cold_text")))
+#else
+#define GBA_COLD
+#endif
+
 #define GBA_SCREEN_WIDTH  (240)
 #define GBA_SCREEN_HEIGHT (160)
 #define GBA_SCREEN_PITCH  (240)

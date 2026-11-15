@@ -64,6 +64,14 @@ SECTIONS
     build/video.o (.text._Z13render_object*)
     build/video.o (.text._ZL16render_w_effects*)
     build/video.o (.text._ZL9order_obj*)
+    /* The blending path's sprite renderers (32-bit line buffer, the indexed
+     * and stacked-colour instances) and the per-line window/effects driver:
+     * the hottest drawing code of a blended screen, which ran from the flash
+     * (Tony's blended menu, PC sampler 2026-11-15). Room for them: the
+     * load-time and savestate code went to the flash (GBA_COLD, common.h). */
+    build/video.o (.text._Z20render_scanline_objsIjL8rendtype1EEvjjjPvPKt*)
+    build/video.o (.text._Z20render_scanline_objsIjL8rendtype2EEvjjjPvPKt*)
+    build/video.o (.text._ZL27render_scanline_conditionaljjPtj)
 
     /* Remaining .data from every object (main_gba already claimed). */
     *(.data .data*)
