@@ -1558,6 +1558,8 @@ void execute_arm(u32 cycles)
   s32 cycles_remaining;
   u32 update_ret;
   cpu_alert_type cpu_alert;
+  u32 next_pc = 0;          /* ARM: the PC after the instruction unless it jumps */
+  u32 arm_step = 4;         /* 4; 1 tests the special PCs after every instruction */
 #ifdef M4A_HLE_VERIFY
   int m4a_in_block = 0;
   s32 m4a_cyc_before = 0;
@@ -1597,9 +1599,26 @@ cpu_loop_top:
     cpu_alert = CPU_ALERT_NONE;
     extract_flags();
 
+    /* The special PCs (the idle skip's loop head, the M4A mixer's entry, the
+     * cheat hook) are tested only after a JUMP -- an instruction that left
+     * the PC anywhere but at the next one -- and at every entry into the
+     * loop, as gw-arcade-core's M68K_HOOKS_ON_BRANCH: a routine's entry and a
+     * loop's head are reached by a jump, so the instructions in between pay
+     * nothing (the M4A compare alone, made before every ARM instruction, was
+     * ~3% of the device's time in a game without M4A). With the cheats or
+     * the per-game idle tables, whose PCs may sit in straight-line code,
+     * every instruction is tested, as before: next_pc = PC + 1 then, which
+     * no instruction leaves the PC at (the special PCs are aligned anyway).
+     * Thumb has no M4A hook, so its one compare stays after every
+     * instruction. The test sits at the top of the ARM loop: the PC is not
+     * where the last instruction would have left it (a jump; or an entry,
+     * next_pc = 0xFFFFFFFF). */
+    arm_step = (idle_loop_cond == IDLE_COND_GENERIC) ? 4 : 1;
+
     if(reg[REG_CPSR] & 0x20)
       goto thumb_loop;
 
+    next_pc = 0xFFFFFFFFu;      /* an entry: test the special PCs */
     do
     {
 arm_loop:
@@ -1611,27 +1630,72 @@ arm_loop:
         * (Kirby, PC sampler, 2026-11-14). The cheat hook is checked with the
         * idle target after each instruction (IDLE_COND_CHEAT, below). */
 
-#ifdef GBA_M4A_HLE
-       /* M4A's software mixer, run natively instead of interpreted.
-        *
-        * Nearly every commercial GBA game mixes its PCM audio on the guest CPU,
-        * with an ARM routine the sound library copies into IWRAM at boot. On a
-        * microcontroller that one routine is the most expensive thing here — 37%
-        * of every guest instruction in Final Fantasy Tactics Advance, and a
-        * per-frame CONSTANT, because the music mixes the same amount of audio
-        * whatever is on screen.
-        *
-        * m4a_hle_execute() is a transliteration of the exact block, byte-matched
-        * before it is trusted: same arithmetic, same memory writes, and the same
-        * guest CYCLES, which are charged and not saved. The guest's timeline does
-        * not move; only the host's work does. It declines (0) on anything it is
-        * not sure of, and then we interpret the block as we always did.
-        *
-        * Resuming at m4a_resume, not skip_instruction, is deliberate: the block's
-        * last instruction has already paid its own fetch, and skip_instruction
-        * would charge it a second time — one cycle per block, which would show up
-        * as music that slowly drifts and nothing else. */
-#ifdef M4A_HLE_VERIFY
+       /* The special PCs, after a jump or at an entry (see above).
+        * GCC: the expect keeps the no-jump path straight; the block once sat
+        * in the post path with a goto into it from the entry, and GCC
+        * merged the loop's tail behind three taken branches and a spill per
+        * instruction (+10% device time in the interpreter, Tony Hawk):
+        * re-check the disassembly if this moves. */
+       if (__builtin_expect(reg[REG_PC] != next_pc, 0))
+       {
+#if defined(GBA_M4A_HLE) && !defined(M4A_HLE_VERIFY)
+          /* M4A's software mixer, run natively instead of interpreted.
+           *
+           * Nearly every commercial GBA game mixes its PCM audio on the guest
+           * CPU, with an ARM routine the sound library copies into IWRAM at
+           * boot -- 37% of every guest instruction in Final Fantasy Tactics
+           * Advance. m4a_hle_execute() is a transliteration of the exact
+           * block, byte-matched before it is trusted: same arithmetic, same
+           * memory writes, the same guest CYCLES. It declines (0) on anything
+           * it is not sure of, and the block is interpreted as before.
+           *
+           * Resuming at m4a_resume, not skip_instruction, is deliberate: the
+           * block's last instruction has already paid its own fetch, and
+           * skip_instruction would charge it a second time. */
+          if (reg[REG_PC] == m4a_hook_pc)
+          {
+             s32 m4a_cycles = cycles_remaining;
+             collapse_flags();   /* the CPSR as the block's first instruction saw it */
+             int m4a_rc = m4a_hle_execute(reg, &m4a_cycles,
+                                          &n_flag, &z_flag, &c_flag, &v_flag);
+             /*   1  it finished           -> carry on at the block's exit
+              *   2  it gave way mid-block -> an interrupt, a halt or a DMA stall
+              *                               took the PC; drive from there
+              *   3  the frame ended       -> return, exactly as this loop would
+              *   0  it declined           -> interpret the block */
+             if (m4a_rc == 1)
+             {
+                cycles_remaining = m4a_cycles;
+                reg[REG_PC] = m4a_hook_exit_pc;
+                next_pc = 0xFFFFFFFFu;     /* the exit PC is tested next */
+                goto m4a_resume;
+             }
+             if (m4a_rc == 2)
+             {
+                cycles_remaining = m4a_cycles;   /* PC was set by the block */
+                goto cpu_loop_top;
+             }
+             if (m4a_rc == 3)
+                return;
+          }
+#endif
+          /* idle_loop_cond: GENERIC proves and skips the poll loop's passes
+           * (gba_idle.c); CHEAT is about to execute the cheat hook; the
+           * per-game tables' ALWAYS / WHEN_NE burn the slice (WHEN_NE only
+           * while the compare says it will loop, see cpu.h). */
+          if (reg[REG_PC] == idle_loop_target_pc) {
+             if (idle_loop_cond == IDLE_COND_GENERIC)
+                cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
+             else if (idle_loop_cond == IDLE_COND_CHEAT)
+                process_cheats();
+             else if (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0) {
+                cycles_remaining = 0;
+                break;                  /* to the event, as the slice ends */
+             }
+          }
+       }
+
+#if defined(GBA_M4A_HLE) && defined(M4A_HLE_VERIFY)
        /* Verify build: let the INTERPRETER run the block, and remember the state
         * it started from. The comparison happens at the exit PC below. */
        if (reg[REG_PC] == m4a_hook_pc)
@@ -1645,40 +1709,7 @@ arm_loop:
           m4a_cyc_before = cycles_remaining;
           m4a_blk_insns++;
        }
-#else
-       if (reg[REG_PC] == m4a_hook_pc)
-       {
-          s32 m4a_cycles = cycles_remaining;
-          collapse_flags();   /* the CPSR as the block's first instruction saw it */
-          int m4a_rc = m4a_hle_execute(reg, &m4a_cycles,
-                                       &n_flag, &z_flag, &c_flag, &v_flag);
-          /* The block does its own cycle accounting and, when its budget runs out
-           * mid-way, calls update_gba() itself from exactly the instruction this
-           * loop would have stopped at. So there is nothing to reconcile here —
-           * only three ways out.
-           *
-           *   1  it finished          -> carry on at the block's exit
-           *   2  it gave way mid-block -> an interrupt, a halt or a DMA stall took
-           *                               the PC; the interpreter drives from there
-           *   3  the frame ended       -> return, exactly as this loop would
-           *   0  it declined           -> interpret the block, as if none of this
-           *                               were here */
-          if (m4a_rc == 1)
-          {
-             cycles_remaining = m4a_cycles;
-             reg[REG_PC] = m4a_hook_exit_pc;
-             goto m4a_resume;
-          }
-          if (m4a_rc == 2)
-          {
-             cycles_remaining = m4a_cycles;   /* PC was set by the block */
-             goto cpu_loop_top;
-          }
-          if (m4a_rc == 3)
-             return;
-       }
-#endif  /* M4A_HLE_VERIFY */
-#endif  /* GBA_M4A_HLE */
+#endif
 
        /* Execute ARM instruction */
 #ifdef M4A_COUNT_INSNS
@@ -1691,7 +1722,9 @@ arm_loop:
 #endif
        using_instruction(arm);
        check_pc_region();
-       reg[REG_PC] &= ~0x03;
+       if (__builtin_expect(reg[REG_PC] & 0x03, 0))   /* stored only when misaligned */
+          reg[REG_PC] &= ~0x03;
+       next_pc = reg[REG_PC] + arm_step;  /* where the PC goes unless there is a jump */
        opcode = readaddress32(pc_address_block, (reg[REG_PC] & 0x7FFF));
 #ifdef GBA_PCHIST
        if (gba_pchist_on > 0)
@@ -3247,29 +3280,15 @@ skip_instruction:
           m4a_blk_cycles += (unsigned int)(m4a_cyc_before - cycles_remaining);
 #endif
 
-#ifdef GBA_M4A_HLE
+#if defined(GBA_M4A_HLE) && !defined(M4A_HLE_VERIFY)
 m4a_resume:
-       /* The M4A HLE lands here, past the fetch charge above: it has already paid
-        * for every instruction it ran, including the last one's. */
+       /* The M4A HLE lands here, past the fetch charge above: it has already
+        * paid for every instruction it ran, including the last one's. */
 #endif
 
 #ifdef GBA_ICOUNT
        gba_icount++;   /* host and PROF builds only: instructions executed */
 #endif
-       /* idle_loop_cond: ALWAYS is the classic semantic. WHEN_NE parks on a
-        * poll's closing branch and burns the slice only while the compare says
-        * it will loop — see cpu.h for the caller shape that demands this. The
-        * extra test costs nothing: it is only evaluated on a pc match. */
-       if (reg[REG_PC] == idle_loop_target_pc) {
-          if (idle_loop_cond == IDLE_COND_GENERIC)
-             cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);
-          else if (idle_loop_cond == IDLE_COND_CHEAT)
-             process_cheats();     /* about to execute the cheat hook */
-          else if (cycles_remaining > 0 &&
-                   (idle_loop_cond == IDLE_COND_ALWAYS || z_flag == 0))
-             cycles_remaining = 0;
-       }
-
 #ifdef IDLE_SKIP_TRACE
        /* Host-only forensics: what does the parked loop actually observe, and
         * does it ever get OUT? Exit = the `mov pc, lr` right after the loop. */
@@ -3327,7 +3346,8 @@ thumb_loop:
 
        using_instruction(thumb);
        check_pc_region();
-       reg[REG_PC] &= ~0x01;
+       if (__builtin_expect(reg[REG_PC] & 0x01, 0))   /* stored only when odd */
+          reg[REG_PC] &= ~0x01;
        opcode = readaddress16(pc_address_block, (reg[REG_PC] & 0x7FFF));
 #ifdef GBA_PCHIST
        if (gba_pchist_on > 0)
@@ -3535,10 +3555,12 @@ thumb_loop:
                 }
                 else
                 {
-                   /* Switch to ARM mode */
+                   /* Switch to ARM mode: an entry, the special PCs are
+                    * tested (the sound library calls its mixer this way) */
                    reg[REG_PC] = src;
                    reg[REG_CPSR] &= ~0x20;
                    collapse_flags();
+                   next_pc = 0xFFFFFFFFu;
                    goto arm_loop;
                 }
              }
@@ -3796,7 +3818,8 @@ thumb_loop:
 #ifdef GBA_ICOUNT
        gba_icount++;
 #endif
-       /* Same conditional-skip semantic as the ARM side above. */
+       /* Same conditional-skip semantic as the ARM side above (after every
+        * instruction: one compare, and no M4A hook in Thumb). */
        if (reg[REG_PC] == idle_loop_target_pc) {
           if (idle_loop_cond == IDLE_COND_GENERIC)
              cycles_remaining = gba_idle_head(cycles_remaining, n_flag, z_flag, c_flag, v_flag);

@@ -82,6 +82,10 @@ attached to the release:
   instead of before every instruction, and the cheat hook shares the idle
   skip's one PC compare (with cheats on, the idle skip is off). Exact: the
   same `REC/hash` lines as before in all 149 games that run on the host.
+- Interpreter: the special PCs (the idle skip's loop head, the M4A
+  mixer's entry, the cheat hook) are tested only after an ARM jump or on
+  entering the ARM loop, not before every ARM instruction, and the PC is
+  masked only when it is misaligned.
 - Hot code out of the flash: the plain sprite renderer, the tile-layer
   drivers, the M4A HLE's memory helpers and the idle skip's hooks run from
   ITCM (the device PC sampler found them running from gba.xip); the serial
