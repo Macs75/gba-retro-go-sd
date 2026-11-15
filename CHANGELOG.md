@@ -137,6 +137,14 @@ attached to the release:
   (mod 8 KB, the I-cache's set span), the flash read-only data and the GBA
   memories (mod 4 KB, the D-cache's set span). Unpinned, unrelated edits
   moved the drawing's cost by 5-14%.
+- The game's M4A sound mixer (the native one, run per sound buffer) is
+  copied from the flash to the AHB heap at start-up and runs there: the
+  flash blob's place is the firmware's (4 KB aligned, a new one at every
+  update), so the same mixer's cost depended on where it landed (Kirby & The
+  Amazing Mirror: 524-763K cycles a frame). Its calls into the ITCM memory
+  helpers are direct (-mlong-calls) instead of through veneers in the flash.
+  Device, Kirby: mixer -24.5%, emulation -3.8%, same state hashes. If the
+  AHB heap has no room the mixer stays in the flash (the log says which).
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the

@@ -72,6 +72,16 @@ unsigned int m4a_hook_pc;
 unsigned int m4a_hook_exit_pc;
 
 static const m4a_variant *s_variant;
+/* the mixer actually called: s_variant->run, or its copy in RAM (below).
+ * At the end of .bss (ld/gba_core.ld .gba_tail_bss): new variables in front
+ * of the GBA memories would move them mod 4 KB, the D-cache's set span. */
+#ifndef HOST_BUILD
+#define M4A_TAIL_BSS __attribute__((section(".gba_tail_bss")))
+#else
+#define M4A_TAIL_BSS
+#endif
+static int (*s_run)(m4a_state *s, const m4a_bus *bus) M4A_TAIL_BSS;
+static void *s_run_mem M4A_TAIL_BSS;      /* the copy's allocation, freed on reset */
 static int s_scan_done;      /* found it, or given up */
 static int s_frames_scanned;
 
@@ -198,8 +208,73 @@ static const m4a_bus s_bus = { m4a_map, m4a_cost, m4a_refill, 0 };
 #define M4A_COLD
 #endif
 
+#ifndef HOST_BUILD
+/* The mixers run per sound buffer, natively. From the flash they go through
+ * the I-cache at an address the firmware picks when it caches gba.xip (4 KB
+ * aligned: the same code cost 524K-763K cycles a frame in Kirby, 2026-11-15).
+ * The game's one mixer is copied to the AHB heap instead, at the same address
+ * every boot. Copy-safe: m4a_hle.o is built with -mlong-calls (its calls into
+ * the ITCM helpers are absolute), and a mixer's literal pool and jump tables
+ * are inside its own bounds (ld/gba_core.ld __m4a_mix_*). No AHB room: it
+ * stays in the flash. */
+#include <string.h>
+#include <odroid_system.h>
+#include "gw_malloc.h"
+#define M4A_MIX(n) extern const unsigned char __m4a_mix_##n##_start[], __m4a_mix_##n##_end[];
+M4A_MIX(v1) M4A_MIX(v2) M4A_MIX(v3) M4A_MIX(v4) M4A_MIX(v5) M4A_MIX(v6)
+
+/* the bytes from the mixer at `code` to the end of its bounds (the function
+ * may start a few bytes into them: its section's alignment), compared in
+ * code: a table would be RAM data in front of cpu.o's hot tables */
+M4A_COLD static uint32_t m4a_mix_size(uintptr_t code)
+{
+#define M4A_MIX_IS(n) \
+    if (code >= (uintptr_t)__m4a_mix_##n##_start && code < (uintptr_t)__m4a_mix_##n##_end) \
+        return (uint32_t)((uintptr_t)__m4a_mix_##n##_end - code);
+    M4A_MIX_IS(v1) M4A_MIX_IS(v2) M4A_MIX_IS(v3) M4A_MIX_IS(v4) M4A_MIX_IS(v5) M4A_MIX_IS(v6)
+#undef M4A_MIX_IS
+    return 0;
+}
+
+M4A_COLD static void m4a_mix_to_ram(const m4a_variant *v)
+{
+    uintptr_t code = (uintptr_t)v->run & ~1u;
+    uint32_t size = m4a_mix_size(code);
+    if (!size) {
+        printf("m4a: %s mixer at %p is outside every __m4a_mix bound: stays in the flash\n",
+               v->name, (void *)code);
+        return;
+    }
+    /* ahb_calloc: the AHB wrapper the core already links (a new one would
+     * move the RAM code after it) */
+    uint8_t *mem = (uint8_t *)ahb_calloc(1, size + 32);
+    if (!mem) {
+        printf("m4a: %s mixer stays in the flash (no %lu bytes of AHB)\n",
+               v->name, (unsigned long)size);
+        return;
+    }
+    uint8_t *dst = (uint8_t *)(((uintptr_t)mem + 31u) & ~31u);
+    memcpy(dst, (const void *)code, size);
+    SCB_CleanDCache_by_Addr((uint32_t *)dst, (int32_t)size);
+    __DSB();
+    SCB_InvalidateICache();
+    __DSB();
+    __ISB();
+    s_run_mem = mem;
+    s_run = (int (*)(m4a_state *, const m4a_bus *))((uintptr_t)dst | 1u);
+    printf("m4a: %s mixer, %lu bytes, runs from %p\n", v->name,
+           (unsigned long)size, (void *)dst);
+}
+#endif
+
 M4A_COLD void m4a_hle_reset(void)
 {
+#ifndef HOST_BUILD
+    if (s_run_mem)
+        free(s_run_mem);
+    s_run_mem = 0;
+#endif
+    s_run            = 0;
     m4a_hook_pc      = 0;
     m4a_hook_exit_pc = 0;
     s_variant        = 0;
@@ -230,6 +305,10 @@ M4A_COLD void m4a_hle_scan_frame(void)
         return;
 
     s_variant        = v;
+    s_run            = v->run;
+#ifndef HOST_BUILD
+    m4a_mix_to_ram(v);
+#endif
     m4a_hook_pc      = pc;
     m4a_hook_exit_pc = pc + v->exit_off;
     s_scan_done      = 1;
@@ -271,7 +350,7 @@ int m4a_hle_execute(unsigned int *regs, int *cycles,
     st.pc = m4a_hook_pc;       /* the block's base; CHK() builds resume PCs from it */
 
     GBA_PROF_START(GBA_PART_M4A);
-    rc = s_variant->run(&st, &s_bus);
+    rc = s_run(&st, &s_bus);
     GBA_PROF_STOP(GBA_PART_M4A);
 #if defined(GBA_PROF) && !defined(HOST_BUILD)
     gba_prof_m4a_calls++;
@@ -327,7 +406,7 @@ static int m4a_hle_execute_offline(unsigned int *regs, long *cost,
     st.n = *n; st.z = *z; st.c = *c; st.v = *v;
     st.pc = m4a_hook_pc;
 
-    rc = s_variant->run(&st, &s_bus_offline);
+    rc = s_run(&st, &s_bus_offline);
     if (rc != M4A_DONE)
         return 0;
 

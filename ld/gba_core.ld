@@ -140,6 +140,7 @@ SECTIONS
     . = ALIGN(8);
     *(.bss*)
     *(COMMON)
+    *(.gba_tail_bss)         /* new variables, behind the GBA memories */
   } >RAM_EMU
 
   __CORE_BSS_END__ = .;
@@ -177,6 +178,7 @@ SECTIONS
     build/m4a_hle.o (.text.rd_* .text.wr_* .text.win_hold)
     /* The text-layer renderer's hot pair: their unrolled tile loops
      * (video.cc TILE_LOOP) do not fit RAM_EMU. */
+    . = ALIGN(. - 4, 32) + 4;  /* at their measured place mod 32 (runs 20-27) */
     build/video.o (.text._Z20render_scanline_textItL8rendtype0ELb1EEvjjjPvPKt)
     build/video.o (.text._Z20render_scanline_textItL8rendtype0ELb0EEvjjjPvPKt)
     /* Read-only tables the interpreter reads every instruction: the
@@ -208,6 +210,14 @@ SECTIONS
     build/rfu.o (.text .text*)
     build/input.o (.text .text*)
     build/gba_frontend.o (.text .text*)
+    /* The M4A mixers, each bounded: the game's one is copied to RAM at
+     * start-up (m4a_gpsp.c m4a_mix_to_ram); the copy must hold all of it. */
+    . = ALIGN(4); __m4a_mix_v1_start = .; build/m4a_hle.o (.text.m4a_run_v1_mono)       __m4a_mix_v1_end = .;
+    . = ALIGN(4); __m4a_mix_v2_start = .; build/m4a_hle.o (.text.m4a_run_v2_stereo)     __m4a_mix_v2_end = .;
+    . = ALIGN(4); __m4a_mix_v3_start = .; build/m4a_hle.o (.text.m4a_run_v3_stereo2)    __m4a_mix_v3_end = .;
+    . = ALIGN(4); __m4a_mix_v4_start = .; build/m4a_hle.o (.text.m4a_run_v4_stereo3)    __m4a_mix_v4_end = .;
+    . = ALIGN(4); __m4a_mix_v5_start = .; build/m4a_hle.o (.text.m4a_run_v5_bytes)      __m4a_mix_v5_end = .;
+    . = ALIGN(4); __m4a_mix_v6_start = .; build/m4a_hle.o (.text.m4a_run_v6_bytes_mono) __m4a_mix_v6_end = .;
     build/m4a_hle.o (.text .text*)
     build/cheats.o (.text .text*)
     build/gba_idle_loop.o (.text .text*)

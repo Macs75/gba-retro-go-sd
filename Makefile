@@ -189,7 +189,11 @@ $(BUILD_DIR)/cpu.o:              OPT := -O3 --param max-goto-duplication-insns=4
 $(BUILD_DIR)/video.o:            OPT := -O2
 $(BUILD_DIR)/sound.o:            OPT := -O2
 $(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2
-$(BUILD_DIR)/m4a_hle.o:          OPT := -O2
+# GCC: -mlong-calls makes the M4A mixers copy-safe: their calls into the
+# ITCM memory helpers load absolute addresses from their own literal pools
+# instead of a PC-relative bl to a veneer that stays behind in the flash
+# (m4a_gpsp.c copies the game's mixer to RAM).
+$(BUILD_DIR)/m4a_hle.o:          OPT := -O2 -mlong-calls
 $(BUILD_DIR)/m4a_gpsp.o:         OPT := -O2
 
 #######################################
