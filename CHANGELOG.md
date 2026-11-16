@@ -166,6 +166,13 @@ attached to the release:
   set and the blended layers' instances) run from RAM instead of the flash.
   Device, F-Zero: Maximum Velocity's race: drawing -5.1% per drawn frame,
   frames skipped 246 -> 157.
+- Windows 0/1: when a line's window regions show the same layers and differ
+  only in the colour effect (a game dimming part of the screen), the layers
+  are drawn once and each region merged with or without the effect; they
+  were drawn again per region, five times a line with two side-by-side
+  windows. Same pictures (host picture hashes, all 4693 frames of the
+  recording). Device, Super Puzzle Fighter II's match: drawing 2.36M ->
+  1.99M cycles per drawn frame, 33-47 -> 39-48 frames shown a second.
 - Game HLE: a game whose frame is dominated by one guest routine can have it
   run natively, with the interpreter's exact memory accesses, cycle charges
   and stopping points (same state hashes). Each routine is an overlay linked

@@ -1796,8 +1796,13 @@ typedef enum
 // Bit 9 is set if the pixel belongs to a 1st target layer
 // Bit 10 is set if the pixel belongs to a 2nd target layer
 // Bit 11 is set if the pixel belongs to a ST-object
+// GCC: always inlined into render_w_effects (each merge has one call site
+// there): with its pre-drawn mode GCC emitted merge_blend<OBJ_BLEND, true>
+// out of line, in the flash -- the per-pixel loop of every screen with
+// semi-transparent sprites. Drop if render_w_effects stops growing it out.
 template <blendtype bldtype, bool st_objs>
-static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
+static inline __attribute__((always_inline))
+void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
   u32 bldalpha = read_ioreg(REG_BLDALPHA);
   u32 brightf = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
   u32 blend_a = MIN(16, (bldalpha >> 0) & 0x1F);
@@ -1881,7 +1886,8 @@ static void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
 
 // Applies brighten/darken effect to a bunch of color-indexed pixels.
 template <blendtype bldtype>
-static void merge_brightness(u32 start, u32 end, u16 *srcdst) {
+static inline __attribute__((always_inline))   /* GCC: as merge_blend */
+void merge_brightness(u32 start, u32 end, u16 *srcdst) {
   u32 brightness = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
 
   while (start < end) {
@@ -2014,6 +2020,14 @@ void tile_render_layers(u32 start, u32 end, dsttype *dst_ptr, u32 enabled_layers
 }
 
 
+// An indexed line to colours, no effect (what FULLCOLOR draws directly).
+static void merge_none(u32 start, u32 end, u16 *srcdst) {
+  while (start < end) {
+    srcdst[start] = palette_ram_converted[srcdst[start] & 0x1FF];
+    start++;
+  }
+}
+
 // Renders all layers honoring color effects (blending, brighten/darken).
 // It uses different rendering routines depending on the coloring effect
 // requirements, speeding up common cases where no effects are used.
@@ -2025,9 +2039,14 @@ void tile_render_layers(u32 start, u32 end, dsttype *dst_ptr, u32 enabled_layers
 // which similarly uses an indexed color for rendering but recording one
 // color for the background and another one for the object layer.
 
+// pre32 / pre16: the caller already drew the whole line (render_window_one_pass)
+// in the format this region's effect uses -- pre32 the 32-bit buffer
+// (indexed_u32 or stacked), pre16 the 16-bit indexed one in scanline -- so
+// only [start, end) is merged here. Each merge stays one call site: GCC
+// inlines them (a second caller made it emit them once, out of line).
 static void render_w_effects(
   u32 start, u32 end, u16* scanline, u32 enable_flags,
-  const layer_render_struct *renderers
+  const layer_render_struct *renderers, u32 *pre32 = NULL, bool pre16 = false
 ) {
   bool effects_enabled = enable_flags & 0x20;   // Window bit for effects.
   bool obj_blend = obj_alpha_count[read_ioreg(REG_VCOUNT)] > 0;
@@ -2047,10 +2066,12 @@ static void render_w_effects(
       if (some_1st_tgt && non_zero_blend) {
         if (obj_blend) {
           u32 tmp_buf[240];
-          renderers->indexed_u32(start, end, tmp_buf, enable_flags);
-          merge_blend<BLEND_BRIGHT, true>(start, end, scanline, tmp_buf);
+          if (!pre32)
+            renderers->indexed_u32(start, end, tmp_buf, enable_flags);
+          merge_blend<BLEND_BRIGHT, true>(start, end, scanline, pre32 ? pre32 : tmp_buf);
         } else {
-          renderers->indexed_u16(start, end, scanline, enable_flags);
+          if (!pre16)
+            renderers->indexed_u16(start, end, scanline, enable_flags);
           merge_brightness<BLEND_BRIGHT>(start, end, scanline);
         }
         return;
@@ -2067,10 +2088,12 @@ static void render_w_effects(
       if (some_1st_tgt && non_zero_blend) {
         if (obj_blend) {
           u32 tmp_buf[240];
-          renderers->indexed_u32(start, end, tmp_buf, enable_flags);
-          merge_blend<BLEND_DARK, true>(start, end, scanline, tmp_buf);
+          if (!pre32)
+            renderers->indexed_u32(start, end, tmp_buf, enable_flags);
+          merge_blend<BLEND_DARK, true>(start, end, scanline, pre32 ? pre32 : tmp_buf);
         } else {
-          renderers->indexed_u16(start, end, scanline, enable_flags);
+          if (!pre16)
+            renderers->indexed_u16(start, end, scanline, enable_flags);
           merge_brightness<BLEND_DARK>(start, end, scanline);
         }
         return;
@@ -2087,11 +2110,13 @@ static void render_w_effects(
       bool non_trns_tgt = (read_ioreg(REG_BLDALPHA) & 0x1F1F) != 0x001F;
       if (some_1st_tgt && some_2nd_tgt && non_trns_tgt) {
         u32 tmp_buf[240];
-        renderers->stacked(start, end, tmp_buf, enable_flags);
+        u32 *buf = pre32 ? pre32 : tmp_buf;
+        if (!pre32)
+          renderers->stacked(start, end, tmp_buf, enable_flags);
         if (obj_blend)
-          merge_blend<BLEND_ONLY, true>(start, end, scanline, tmp_buf);
+          merge_blend<BLEND_ONLY, true>(start, end, scanline, buf);
         else
-          merge_blend<BLEND_ONLY, false>(start, end, scanline, tmp_buf);
+          merge_blend<BLEND_ONLY, false>(start, end, scanline, buf);
         return;
       }
     }
@@ -2103,10 +2128,15 @@ static void render_w_effects(
   };
 
   // Default rendering mode, without layer effects (except perhaps sprites).
-  if (obj_blend) {
+  // A pre-drawn 32-bit line merges here even without ST objects: with none
+  // on the line no pixel has the ST flag, and this is a palette lookup.
+  if (obj_blend || pre32) {
     u32 tmp_buf[240];
-    renderers->stacked(start, end, tmp_buf, enable_flags);
-    merge_blend<OBJ_BLEND, true>(start, end, scanline, tmp_buf);
+    if (!pre32)
+      renderers->stacked(start, end, tmp_buf, enable_flags);
+    merge_blend<OBJ_BLEND, true>(start, end, scanline, pre32 ? pre32 : tmp_buf);
+  } else if (pre16) {
+    merge_none(start, end, scanline);
   } else {
     renderers->fullcolor(start, end, scanline, enable_flags);
   }
@@ -2338,6 +2368,126 @@ static void render_window_n_pass(u16 *scanline, u32 start, u32 end)
   }
 }
 
+// Windows 0/1 whose regions on this line show the same layers, differing at
+// most in the colour-effect bit (a game dimming or fading only part of the
+// screen, e.g. Super Puzzle Fighter II's wells): the layers are drawn once
+// over the whole line, in the buffer format the effect needs, and each
+// region is then merged with or without the effect. The per-region passes
+// (render_window_n_pass) drew every layer again for each region: 5 regions a
+// line with two side-by-side windows, each a full setup of every layer.
+// Same pixels as those passes (host GBA_SCREENHASH).
+
+struct win_seg { u16 start, end; u8 mask; };
+
+// The regions render_window_n_pass would draw, in its order and with its
+// clipping, as a list: wins[] the windows still to test (0 before 1), the
+// outside last.
+static void window_segments(win_seg *seg, u32 *nseg, u32 start, u32 end,
+                            const u8 *wins, u32 nwins)
+{
+  if (!nwins) {
+    if (start < end)
+      seg[(*nseg)++] = (win_seg){ (u16)start, (u16)end, (u8)(read_ioreg(REG_WINOUT) & 0x3F) };
+    return;
+  }
+  u32 winnum = wins[0];
+  u32 vcount = read_ioreg(REG_VCOUNT);
+  u32 win_top = read_ioreg(REG_WINxV(winnum)) >> 8;
+  u32 win_bot = read_ioreg(REG_WINxV(winnum)) & 0xFF;
+  u32 win_lraw = read_ioreg(REG_WINxH(winnum)) >> 8;
+  u32 win_rraw = read_ioreg(REG_WINxH(winnum)) & 0xFF;
+  u32 win_l = MAX(start, MIN(end, win_lraw));
+  u32 win_r = MAX(start, MIN(end, win_rraw));
+  u8 inmask = (read_ioreg(REG_WININ) >> (8 * winnum)) & 0x3F;
+
+  if (!in_window_y(vcount, win_top, win_bot) || (win_lraw == win_rraw))
+    window_segments(seg, nseg, start, end, wins + 1, nwins - 1);
+  else if (win_lraw < win_rraw) {
+    if (win_l != start)
+      window_segments(seg, nseg, start, win_l, wins + 1, nwins - 1);
+    if (win_l < win_r)
+      seg[(*nseg)++] = (win_seg){ (u16)win_l, (u16)win_r, inmask };
+    if (win_r != end)
+      window_segments(seg, nseg, win_r, end, wins + 1, nwins - 1);
+  } else {
+    if (win_r != start)
+      seg[(*nseg)++] = (win_seg){ (u16)start, (u16)win_r, inmask };
+    window_segments(seg, nseg, win_r, win_l, wins + 1, nwins - 1);
+    if (win_l != end)
+      seg[(*nseg)++] = (win_seg){ (u16)win_l, (u16)end, inmask };
+  }
+}
+
+// 1 if it drew the line (windows 0 and/or 1, win_ctrl 1-3), 0 to leave it
+// to the per-region passes.
+static int render_window_one_pass(u16 *scanline, u32 win_ctrl)
+{
+  u16 dispcnt = read_ioreg(REG_DISPCNT);
+  u32 video_mode = dispcnt & 0x07;
+  if (video_mode == 3 || video_mode >= 5)
+    return 0;
+  const layer_render_struct *rd = video_mode < 3 ? &tile_mode_renderers
+                                                 : &bitmap_mode_renderers;
+  // the windows to test, 0 before 1 (stores, not a table: no new flash
+  // data in front of the renderer's)
+  u8 wins[2];
+  wins[0] = win_ctrl == 2;
+  wins[1] = 1;
+  win_seg seg[16];
+  u32 nseg = 0;
+  window_segments(seg, &nseg, 0, 240, wins, win_ctrl == 3 ? 2 : 1);
+
+  u32 mask = seg[0].mask, all_same = 1;
+  for (u32 i = 1; i < nseg; i++) {
+    if ((seg[i].mask ^ mask) & 0x1F)
+      return 0;                        // different layers: per region
+    all_same &= seg[i].mask == mask;
+  }
+  if (!layer_count || !(mask & 0x1F))
+    return 0;                          // the backdrop path: per region
+  u32 layers = mask & 0x1F;
+  if (all_same) {
+    render_w_effects(0, 240, scanline, mask, rd);
+    return 1;
+  }
+
+  // Mixed: some regions have the effect bit. As render_w_effects decides
+  // for one of them:
+  u16 bldcnt = read_ioreg(REG_BLDCNT);
+  bool obj_blend = obj_alpha_count[read_ioreg(REG_VCOUNT)] > 0;
+  u32 effect_type = (bldcnt >> 6) & 0x03;
+  bool some_1st_tgt = (bldcnt & 0x3F) != 0;
+  bool effective;
+  if (effect_type == COL_EFFECT_BRIGHT || effect_type == COL_EFFECT_DARK)
+    effective = some_1st_tgt && (read_ioreg(REG_BLDY) & 0x1F) != 0;
+  else if (effect_type == COL_EFFECT_BLEND)
+    effective = some_1st_tgt && (bldcnt & 0x3F00) != 0 &&
+                (read_ioreg(REG_BLDALPHA) & 0x1F1F) != 0x001F;
+  else
+    effective = false;
+  if (!effective) {
+    // the effect regions fall back to plain drawing too
+    render_w_effects(0, 240, scanline, layers, rd);
+    return 1;
+  }
+
+  // The whole line once, in the format the effect regions use; then every
+  // region merges from it (render_w_effects, pre-drawn).
+  u32 tmp_buf[240];
+  u32 *pre32 = NULL;
+  if (effect_type == COL_EFFECT_BLEND) {
+    rd->stacked(0, 240, tmp_buf, layers);
+    pre32 = tmp_buf;
+  } else if (obj_blend) {
+    rd->indexed_u32(0, 240, tmp_buf, layers);
+    pre32 = tmp_buf;
+  } else
+    rd->indexed_u16(0, 240, scanline, layers);
+  for (u32 i = 0; i < nseg; i++)
+    render_w_effects(seg[i].start, seg[i].end, scanline, seg[i].mask, rd, pre32, !pre32);
+  return 1;
+}
+
 // Renders a full scaleline, taking into consideration windowing effects.
 // Breaks the rendering step into N steps, for each windowed region.
 static void render_scanline_window(u16 *scanline)
@@ -2352,15 +2502,18 @@ static void render_scanline_window(u16 *scanline)
     break;
 
   case 0x1: // Window 0
-    render_window_n_pass<render_windowout_pass, 0>(scanline, 0, 240);
+    if (!render_window_one_pass(scanline, win_ctrl))
+      render_window_n_pass<render_windowout_pass, 0>(scanline, 0, 240);
     break;
 
   case 0x2: // Window 1
-    render_window_n_pass<render_windowout_pass, 1>(scanline, 0, 240);
+    if (!render_window_one_pass(scanline, win_ctrl))
+      render_window_n_pass<render_windowout_pass, 1>(scanline, 0, 240);
     break;
 
   case 0x3: // Window 0 & 1
-    render_window_n_pass<render_window_n_pass<render_windowout_pass, 1>, 0>(scanline, 0, 240);
+    if (!render_window_one_pass(scanline, win_ctrl))
+      render_window_n_pass<render_window_n_pass<render_windowout_pass, 1>, 0>(scanline, 0, 240);
     break;
 
   case 0x4: // Window Obj

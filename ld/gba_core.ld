@@ -187,6 +187,7 @@ SECTIONS
     /* PROF's PC sampler (gba_prof.c), the idle-skip hooks (gba_idle.c), the
      * scaler (gba_scale.c). The pass-head hook and the scaler keep their
      * measured places mod 32 (run 37) whatever the event hook's size. */
+    . = ALIGN(. - 4, 32) + 4;  /* the event hook at its run-37 place mod 32 */
     build/gba_prof.o (.gba_itcm_text*)
     build/gba_idle.o (.gba_itcm_text)
     . = ALIGN(. - 12, 32) + 12;
