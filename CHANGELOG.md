@@ -50,6 +50,11 @@ attached to the release:
   skipped (device: ARM 4.0-4.6M -> 1.8-3.5M cycles a frame, every frame
   shown; it dropped frames in 13 of 62 windows).
 
+- Host: `GBA_SCREENHASH=N`, a hash of the drawn picture every N frames
+  (`REC/hash` does not see the picture: for renderer changes);
+  `tools/gba_callgrind_window.sh`, callgrind over frames A-B of a replay
+  only; the video trace (`-DGBA_VIDEO_TRACE`) also keys the windows and the
+  blend factors and counts the lines with semi-transparent sprites.
 - Host tools: `GBA_PCHIST=1` (PC histogram, `tools/gba_pchist.py`),
   `tools/gba_idle_census.sh` (poll loops across a ROM set),
   `tools/gba_idle_ab.sh` (the skip against none, over a ROM set).

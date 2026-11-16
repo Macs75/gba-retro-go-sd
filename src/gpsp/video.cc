@@ -2554,7 +2554,8 @@ static const u8 active_layers[] = {
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-struct vt_ent { uint16_t disp, bld, bg[4]; uint32_t lines, objlines; };
+struct vt_ent { uint16_t disp, bld, bg[4], win[6], alpha, bldy; uint32_t lines, objlines, alines; };
+#define VT_KEY (12 * sizeof(uint16_t))
 static vt_ent vt_tab[64];
 static u32 vt_n, vt_frame;
 static int vt_cmp(const void *a, const void *b)
@@ -2566,20 +2567,61 @@ static void video_trace_line(u16 dispcnt, u32 vcount)
     k.disp = dispcnt; k.bld = read_ioreg(REG_BLDCNT);
     for (int i = 0; i < 4; i++)
       if (dispcnt & (0x100 << i)) k.bg[i] = read_ioreg(REG_BGxCNT(i));
+    if (dispcnt & 0xE000) {   /* any window: its ranges, contents and the effect factors */
+      for (int w = 0; w < 6; w++) k.win[w] = read_ioreg(REG_WIN0H + w);
+      k.alpha = read_ioreg(REG_BLDALPHA); k.bldy = read_ioreg(REG_BLDY);
+    }
     u32 i;
     for (i = 0; i < vt_n; i++)
-      if (!memcmp(&vt_tab[i], &k, 12)) break;
+      if (!memcmp(&vt_tab[i], &k, VT_KEY)) break;
     if (i == vt_n && vt_n < 64) vt_tab[vt_n++] = k;
-    if (i < vt_n) { vt_tab[i].lines++; for (int p = 0; p < 4; p++) vt_tab[i].objlines += obj_priority_count[p][vcount]; }
+    if (i < vt_n) { vt_tab[i].lines++; for (int p = 0; p < 4; p++) vt_tab[i].objlines += obj_priority_count[p][vcount]; vt_tab[i].alines += obj_alpha_count[vcount] != 0; }
   }
   if (vcount == 159 && ++vt_frame % 120 == 0) {
     qsort(vt_tab, vt_n, sizeof *vt_tab, vt_cmp);
-    for (u32 i = 0; i < vt_n && i < 4; i++)
-      printf("VTR win=%u lines=%5u%% disp=%04x mode=%u bld=%04x bg=%04x,%04x,%04x,%04x objs/line=%u.%u\n",
-             vt_frame / 120 - 1, vt_tab[i].lines * 100 / (120 * 160), vt_tab[i].disp, vt_tab[i].disp & 7,
+    for (u32 i = 0; i < vt_n && i < 8; i++) {
+      printf("VTR win=%u lines=%5u%% semitransparent-obj lines=%3u%% disp=%04x mode=%u bld=%04x bg=%04x,%04x,%04x,%04x objs/line=%u.%u\n",
+             vt_frame / 120 - 1, vt_tab[i].lines * 100 / (120 * 160), vt_tab[i].lines ? vt_tab[i].alines * 100 / vt_tab[i].lines : 0, vt_tab[i].disp, vt_tab[i].disp & 7,
              vt_tab[i].bld, vt_tab[i].bg[0], vt_tab[i].bg[1], vt_tab[i].bg[2], vt_tab[i].bg[3],
              vt_tab[i].lines ? vt_tab[i].objlines / vt_tab[i].lines : 0, vt_tab[i].lines ? vt_tab[i].objlines * 10 / vt_tab[i].lines % 10 : 0);
+      if (vt_tab[i].disp & 0xE000)
+        printf("VTR     win0h=%04x win1h=%04x win0v=%04x win1v=%04x winin=%04x winout=%04x alpha=%04x bldy=%04x\n",
+               vt_tab[i].win[0], vt_tab[i].win[1], vt_tab[i].win[2], vt_tab[i].win[3], vt_tab[i].win[4], vt_tab[i].win[5],
+               vt_tab[i].alpha, vt_tab[i].bldy);
+    }
     vt_n = 0;
+  }
+}
+#endif
+
+#ifdef HOST_BUILD
+/* Host: GBA_SCREENHASH=N prints the hash of the picture drawn (240x160, the
+ * renderer's output before scaling) every N-th frame, for checking that a
+ * renderer change draws the same pixels: compare two runs' SCRHASH lines.
+ * The REC/hash lines do not see the picture. Frames not drawn print nothing. */
+#include <stdio.h>
+#include <stdlib.h>
+static void screen_hash_line(const u16 *p, u32 vcount)
+{
+  static int every = -1;
+  static u32 h, lines, frame;
+  if (every < 0) {
+    const char *e = getenv("GBA_SCREENHASH");
+    every = e ? atoi(e) : 0;
+  }
+  if (every <= 0 || vcount >= 160)
+    return;
+  if (vcount == 0) {
+    h = 2166136261u;
+    lines = 0;
+  }
+  for (u32 i = 0; i < 240; i++)
+    h = (h ^ p[i]) * 16777619u;
+  lines++;
+  if (vcount == 159) {
+    if (lines == 160 && frame % (u32)every == 0)
+      printf("SCRHASH n=%u h=%08x\n", frame, h);
+    frame++;
   }
 }
 #endif
@@ -2614,6 +2656,9 @@ void update_scanline(void)
     memset(screen_offset, 0xff, 240*sizeof(u16));
   else
     render_scanline_window(screen_offset);
+#ifdef HOST_BUILD
+  screen_hash_line(screen_offset, vcount);
+#endif
 
   // Mode 0 does not use any affine params at all.
   if (video_mode) {
