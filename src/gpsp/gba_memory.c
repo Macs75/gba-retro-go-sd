@@ -357,7 +357,17 @@ u8 bios_rom[1024 * 16];
 
 
 // Up to 128kb, store SRAM, flash ROM, or EEPROM here.
-u8 gamepak_backup[1024 * 128];
+/* The cart save: 64 KB, 16 slots of 4 KB each holding a sector of bank 0 or
+ * 1 of a 1 Mbit flash (the others on file, src/porting/gba_backup_bank.c).
+ * Every access makes sure its sector is the one in its slot; a write marks
+ * the slot changed. */
+u8 gamepak_backup[1024 * 64];
+#include "../porting/gba_backup_bank.h"
+#define BACKUP_SECT(b, a) {                                                   \
+  u32 _s = ((a) >> 12) & 15;                                                  \
+  if (((backup_sect_owner >> _s) & 1) != (b)) gba_backup_take((b), _s, 0);    \
+}
+#define BACKUP_WROTE(a) (backup_sect_dirty |= 1u << (((a) >> 12) & 15))
 
 u32 dma_bus_val;
 dma_transfer_type dma[4];
@@ -492,8 +502,10 @@ u8 read_backup(u32 address)
   if(backup_type == BACKUP_UNKN)
     backup_type = BACKUP_SRAM;
 
-  if(backup_type == BACKUP_SRAM)
+  if(backup_type == BACKUP_SRAM) {
+    BACKUP_SECT(0, address);
     value = gamepak_backup[address];
+  }
   else if(flash_mode == FLASH_ID_MODE)
   {
     if (flash_bank_cnt == FLASH_SIZE_128KB)
@@ -527,8 +539,8 @@ u8 read_backup(u32 address)
   }
   else
   {
-    u32 fulladdr = address + 64*1024*flash_bank_num;
-    value = gamepak_backup[fulladdr];
+    BACKUP_SECT(flash_bank_num, address);
+    value = gamepak_backup[address];
   }
 
   return value;
@@ -1094,6 +1106,7 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
   u16 val16 = (value << 8) | value;                                           \
   address16(palette_ram, aladdr) = eswap16(val16);                            \
   address16(palette_ram_converted, aladdr) = convert_palette(val16);          \
+  PALETTE_CHANGED(aladdr);                                                    \
 }
 
 #define write_palette16(address, value)                                       \
@@ -1102,6 +1115,7 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
   address16(palette_ram, palette_address) = eswap16(value);                   \
   value = convert_palette(value);                                             \
   address16(palette_ram_converted, palette_address) = value;                  \
+  PALETTE_CHANGED(palette_address);                                           \
 }                                                                             \
 
 #define write_palette32(address, value)                                       \
@@ -1114,6 +1128,8 @@ cpu_alert_type function_cc write_io_register32(u32 address, u32 value)
   address16(palette_ram_converted, palette_address + 2) = value_high;         \
   value_low = convert_palette(value_low);                                     \
   address16(palette_ram_converted, palette_address) = value_low;              \
+  PALETTE_CHANGED(palette_address);                                           \
+  PALETTE_CHANGED(palette_address + 2);                                       \
 }                                                                             \
 
 
@@ -1179,7 +1195,7 @@ void function_cc write_backup(u32 address, u32 value)
           // Erase chip
           if(flash_mode == FLASH_ERASE_MODE)
           {
-            memset(gamepak_backup, 0xFF, 1024 * 128);
+            gba_backup_chip_erase();    /* RAM and the sectors on file */
             flash_mode = FLASH_BASE_MODE;
           }
           break;
@@ -1189,8 +1205,11 @@ void function_cc write_backup(u32 address, u32 value)
       }
       flash_command_position = 0;
     }
-    if(backup_type == BACKUP_SRAM)
+    if(backup_type == BACKUP_SRAM) {
+      BACKUP_SECT(0, 0x5555);
       gamepak_backup[0x5555] = value;
+      BACKUP_WROTE(0x5555);
+    }
   }
   else
 
@@ -1203,8 +1222,13 @@ void function_cc write_backup(u32 address, u32 value)
      (flash_mode == FLASH_ERASE_MODE) && (value == 0x30))
     {
       // Erase sector
-      u32 fulladdr = (address & 0xF000) + 64*1024*flash_bank_num;
-      memset(&gamepak_backup[fulladdr], 0xFF, 1024 * 4);
+      {   /* the sector's old contents are not needed: no read */
+        u32 _s = (address >> 12) & 15;
+        if (((backup_sect_owner >> _s) & 1) != flash_bank_num)
+          gba_backup_take(flash_bank_num, _s, 1);
+      }
+      memset(&gamepak_backup[address & 0xF000], 0xFF, 1024 * 4);
+      BACKUP_WROTE(address);
       flash_mode = FLASH_BASE_MODE;
       flash_command_position = 0;
     }
@@ -1222,8 +1246,9 @@ void function_cc write_backup(u32 address, u32 value)
     if((flash_command_position == 0) && (flash_mode == FLASH_WRITE_MODE))
     {
       // Write value to flash ROM
-      u32 fulladdr = address + 64*1024*flash_bank_num;
-      gamepak_backup[fulladdr] = value;
+      BACKUP_SECT(flash_bank_num, address);
+      gamepak_backup[address] = value;
+      BACKUP_WROTE(address);
       flash_mode = FLASH_BASE_MODE;
     }
     else
@@ -1231,7 +1256,9 @@ void function_cc write_backup(u32 address, u32 value)
     if(backup_type == BACKUP_SRAM)
     {
       // Write value to SRAM
+      BACKUP_SECT(0, address);
       gamepak_backup[address] = value;
+      BACKUP_WROTE(address);
     }
   }
 }
@@ -2923,33 +2950,29 @@ static bool rom_is_pokemon_family(const u8 *rom)
 
 static void normalize_blank_backup_for_detected_type(void)
 {
-  u32 i;
-  u32 size = 0;
-  bool all_zero = true;
+  bool two_banks = backup_type_reset == BACKUP_FLASH && flash_bank_cnt == FLASH_SIZE_128KB;
 
-  if (backup_type_reset == BACKUP_FLASH)
-    size = (flash_bank_cnt == FLASH_SIZE_128KB) ? (128 * 1024) : (64 * 1024);
-  else if (backup_type_reset == BACKUP_EEPROM)
-    size = 8 * 1024;
-  else if (backup_type_reset == BACKUP_SRAM)
-    size = 32 * 1024;
-
-  if (!size)
+  if (backup_type_reset != BACKUP_FLASH && backup_type_reset != BACKUP_EEPROM &&
+      backup_type_reset != BACKUP_SRAM)
     return;
-
-  for (i = 0; i < size; i++)
-  {
-    if (gamepak_backup[i] != 0x00)
-    {
-      all_zero = false;
-      break;
-    }
-  }
 
   // Some frontends create blank save files filled with 0x00.
   // Real flash/EEPROM idle state is 0xFF; normalize it for first boot.
-  if (all_zero)
+  // (The first 8/32/64 KB, as the type's size; a 1 Mbit flash: both banks.
+  // The bytes past the type's size are 0xFF in a blank save written here.)
+  u32 size = backup_type_reset == BACKUP_EEPROM ? 8 * 1024 :
+             backup_type_reset == BACKUP_SRAM   ? 32 * 1024 : 64 * 1024;
+  for (u32 i = 0; i < size; i++)
+    if (gamepak_backup[i] != 0x00)
+      return;
+  if (two_banks && !gba_backup_all_zero(1))
+    return;
+  if (two_banks)
+    gba_backup_chip_erase();      /* both banks */
+  else {
     memset(gamepak_backup, 0xFF, size);
+    backup_sect_dirty = 0xFFFFu;
+  }
 }
 
 /* Every save-type signature, in ONE pass.

@@ -18,8 +18,17 @@
 
 extern void HOST_CORE_ENTRY(uint8_t load_state, uint8_t start_paused, int8_t save_slot);
 
+#ifdef PROJECT_KIND_CORE
+int gba_backup_selftest(const char *dir);   /* src/porting/gba_backup_bank.c */
+#endif
+
 int main(int argc, char **argv)
 {
+#ifdef PROJECT_KIND_CORE
+    /* GBA_BACKUP_SELFTEST=<dir>: the cart-save bank test, then exit */
+    if (getenv("GBA_BACKUP_SELFTEST"))
+        return gba_backup_selftest(getenv("GBA_BACKUP_SELFTEST"));
+#endif
     const char *title =
 #if defined(PROJECT_KIND_HOMEBREW)
         "Retro-Go Homebrew (host)";

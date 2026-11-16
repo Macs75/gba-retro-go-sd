@@ -51,7 +51,8 @@ typedef struct {
 } rec_header_t;
 
 /* gpSP */
-extern uint8_t gamepak_backup[1024 * 128];
+#include "gba_backup_bank.h"
+#include "gba_prof.h"
 extern uint32_t reg[64];
 extern uint32_t spsr[6];
 extern uint32_t reg_mode[7][7];
@@ -157,13 +158,12 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
         int64_t rtc = gba_rtc_base_get();
         rec_header_t h = { REC_MAGIC, REC_VERSION, 0, rom_hash, setup_hash, 0,
                            (uint32_t)(uint64_t)rtc, (uint32_t)((uint64_t)rtc >> 32),
-                           sizeof(gamepak_backup) };
+                           GBA_BACKUP_IMAGE_BYTES };
         rec_hdr = h;
         rec_f = fopen(rec_file, "wb");
         if (!rec_f)
             return rec_fail("cannot create it");
-        if (fwrite(&h, sizeof h, 1, rec_f) != 1 ||
-            fwrite(gamepak_backup, 1, sizeof(gamepak_backup), rec_f) != sizeof(gamepak_backup))
+        if (fwrite(&h, sizeof h, 1, rec_f) != 1 || !gba_backup_export(rec_f))
             return rec_fail("cannot write it");
     } else {
         rec_header_t h;
@@ -171,7 +171,7 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
         if (!rec_f)
             return rec_fail("no recording");
         if (fread(&h, sizeof h, 1, rec_f) != 1 || h.magic != REC_MAGIC ||
-            h.version != REC_VERSION || h.backup_len != sizeof(gamepak_backup))
+            h.version != REC_VERSION || h.backup_len != GBA_BACKUP_IMAGE_BYTES)
             return rec_fail("not a version 1 recording");
         if (h.rom_hash != rom_hash) {
             printf("REC: recorded with another game (%08lx, this one %08lx)\n",
@@ -180,7 +180,7 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
         }
         if (h.setup_hash != setup_hash)
             return rec_fail("recorded with another BIOS or other cheats");
-        if (fread(gamepak_backup, 1, sizeof(gamepak_backup), rec_f) != sizeof(gamepak_backup))
+        if (gba_backup_import(rec_f, GBA_BACKUP_IMAGE_BYTES) != GBA_BACKUP_IMAGE_BYTES)
             return rec_fail("truncated");
         backup_replaced = 1;
         gba_rtc_base_set((int64_t)((uint64_t)h.rtc_lo | ((uint64_t)h.rtc_hi << 32)));
@@ -188,6 +188,7 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
                (unsigned long)h.frames, rec_file);
     }
     rec_mode = mode;
+    GBA_PROF_WINDOW_RESTART();   /* PROF windows: this recording's frames */
     rec_frame = 0;
     rec_hashed_at = 0xFFFFFFFFu;
     rec_audio_h = FNV0;

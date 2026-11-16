@@ -41,10 +41,18 @@ HOST_INC_ROOT := $(GNW_CORE_SDK)/include
 # Device entry is CORE_ENTRY (app_main_gba); host_main.c calls HOST_CORE_ENTRY.
 HOST_CORE_ENTRY ?= $(CORE_ENTRY)
 
+# HOST_PCHIST=0: no PC histogram (GBA_PCHIST): the Thumb handlers then end
+# with the device's own threaded tails (cpu.cc THUMB_NEXT), not the shared
+# copy every host hook takes -- for checking those tails on the host.
+HOST_PCHIST ?= 1
+ifeq ($(HOST_PCHIST),1)
+HOST_PCHIST_DEF := -DGBA_PCHIST=1
+endif
+
 HOST_DEFS := \
 	-DHOST_BUILD=1 \
 	-DGBA_ICOUNT=1 \
-	-DGBA_PCHIST=1 \
+	$(HOST_PCHIST_DEF) \
 	-DHOST_SDL=$(HOST_SDL) \
 	-DHOST_SCALE=$(HOST_SCALE) \
 	-DHOST_CORE_ENTRY=$(HOST_CORE_ENTRY) \

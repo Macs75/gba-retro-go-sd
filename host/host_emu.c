@@ -3,6 +3,7 @@
  * Enough for src/main.c's frame loop: LCD, pad, audio, pacing, text.
  */
 
+#include <valgrind/callgrind.h>   /* GBA_CALLGRIND_FROM: no-ops outside valgrind */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -484,6 +485,9 @@ void odroid_audio_submit(short *stereoAudioBuffer, int frameCount)
 /* GBA_FAST=1: unthrottled -- no frame pacing, no audio queue (replays and
  * hash runs, with SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy).
  * GBA_EXIT_FRAME=N: exit after N emulated frames.
+ * GBA_CALLGRIND_FROM=N: under valgrind --tool=callgrind --instr-atstart=no,
+ * switch the instrumentation on at emulated frame N (the same count as
+ * GBA_EXIT_FRAME: an exact window; tools/gba_callgrind_window.sh).
  * GBA_FRAMESKIP=N: skip drawing N frames of every N+1, as the device's
  * frameskip does (the emulation must not depend on it: REC/hash lines). */
 static int host_env_int(const char *name, int def)
@@ -504,7 +508,7 @@ bool common_emu_frame_loop(void)
 {
     uint32_t now;
     uint32_t target_ms;
-    static int exit_at = -2, skip = -1;
+    static int exit_at = -2, skip = -1, cg_from = -2;
     static uint32_t frames;
 
     host_poll_events();
@@ -514,6 +518,12 @@ bool common_emu_frame_loop(void)
         exit_at = host_env_int("GBA_EXIT_FRAME", -1);
     if (skip < 0)
         skip = host_env_int("GBA_FRAMESKIP", 0);
+    if (cg_from == -2)
+        cg_from = host_env_int("GBA_CALLGRIND_FROM", -1);
+    if (cg_from >= 0 && frames == (uint32_t)cg_from) {
+        CALLGRIND_ZERO_STATS;
+        CALLGRIND_START_INSTRUMENTATION;
+    }
     if (exit_at >= 0 && frames >= (uint32_t)exit_at) {
         printf("host: exit at frame %lu\n", (unsigned long)frames);
         exit(0);
@@ -1085,6 +1095,12 @@ odroid_display_scaling_t odroid_display_get_scaling_mode(void)
 void odroid_display_set_scaling_mode(odroid_display_scaling_t mode) { host_scaling = mode; }
 odroid_display_filter_t odroid_display_get_filter_mode(void) { return host_filter; }
 void odroid_display_set_filter_mode(odroid_display_filter_t mode) { host_filter = mode; }
+
+/* the firmware's folder creation (one level is all the host needs: host_saves) */
+int odroid_sdcard_mkdir(const char *dir)
+{
+    return (mkdir(dir, 0777) == 0 || errno == EEXIST) ? 0 : -1;
+}
 
 char *odroid_system_get_path(emu_path_type_t type, const char *romPath)
 {

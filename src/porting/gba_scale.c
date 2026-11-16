@@ -115,7 +115,9 @@ static void d2_kick(const uint16_t *a, const uint16_t *b, uint32_t wy, uint16_t 
 }
 #endif
 
-static inline void lane(uint16_t *d, const uint16_t *src, int r)
+/* in ITCM: GCC keeps it out of line, and out of line it ran from the flash
+ * (2.6% of the device's time, Super Puzzle Fighter II) */
+GBA_ITCM static void lane(uint16_t *d, const uint16_t *src, int r)
 {
     lane_3to4(d, src + (size_t)r * SRC_W);
 #ifndef HOST_BUILD

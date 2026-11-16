@@ -67,6 +67,8 @@ uint32_t gba_audio_queued(void);      /* main_gba.c: the ISR ring's fill */
 static uint32_t ph[GBA_PH_N];
 static uint32_t last, frame_t0, frame_wait, heaviest;
 static uint32_t frames, drawn, fw_skip, vskip, over, ring_min = 0xffffffffu;
+/* the idle-skip totals at the window's start (PROF/idle) */
+static uint32_t sk0, n0, a0, r0;
 static uint32_t mhz, wall_t0, budget, icount0;
 
 void gba_prof_init(unsigned spf, unsigned rate)
@@ -103,6 +105,7 @@ void gba_prof_mark(int phase)
 
 static int pcs_frame(void);
 static void frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited);
+static void window_reset(void);
 
 void gba_prof_frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited)
 {
@@ -166,12 +169,10 @@ static void frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited)
 #endif
     {   /* the generic poll-loop skip (gba_idle.c): ARM7 cycles skipped per
          * frame (of 280,896), skips in the window, the armed loop */
-        static uint32_t sk0, n0, a0, r0;
         printf("PROF/idle: skipped=%lu GBA cycles per frame, skips=%lu head=%08lx arms=%lu rejects=%lu per window\n",
                (unsigned long)((gba_idle_skipped - sk0) / n), (unsigned long)(gba_idle_skips - n0),
                (unsigned long)gba_idle_head_pc, (unsigned long)(gba_idle_arms - a0),
                (unsigned long)(gba_idle_rejects - r0));
-        sk0 = gba_idle_skipped; n0 = gba_idle_skips; a0 = gba_idle_arms; r0 = gba_idle_rejects;
     }
     printf("PROF/video: scale=%lu present=%lu per drawn frame\n",
            (unsigned long)(ph[GBA_PH_SCALE] / d), (unsigned long)(ph[GBA_PH_PRESENT] / d));
@@ -179,6 +180,12 @@ static void frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited)
            (unsigned long)(ph[GBA_PH_WAIT] / n), (unsigned long)over, (unsigned long)ring_min,
            (unsigned long)804u);
 
+    window_reset();
+}
+
+/* a new window: the counters zeroed, the running totals' starting points */
+static void window_reset(void)
+{
     for (int i = 0; i < GBA_PH_N; i++)
         ph[i] = 0;
     for (int i = 0; i < GBA_PART_N; i++)
@@ -187,9 +194,15 @@ static void frame_end(int was_drawn, int was_fw_skip, int was_vskip, int waited)
     frames = drawn = fw_skip = vskip = over = heaviest = 0;
     ring_min = 0xffffffffu;
     icount0 = gba_icount;
+    sk0 = gba_idle_skipped; n0 = gba_idle_skips; a0 = gba_idle_arms; r0 = gba_idle_rejects;
     wall_t0 = HAL_GetTick();
     /* the printing above is charged to nobody */
     last = frame_t0 = GBA_PROF_NOW();
+}
+
+void gba_prof_window_restart(void)
+{
+    window_reset();
 }
 
 #ifndef GBA_PCS

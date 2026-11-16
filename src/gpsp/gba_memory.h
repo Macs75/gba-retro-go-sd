@@ -275,6 +275,9 @@ extern u8 open_gba_bios_rom[1024*16];
 extern u16 palette_ram[512];
 extern u16 oam_ram[512];
 extern u16 palette_ram_converted[512];
+extern u32 palette_changed[16];   /* entries written since video.cc's effect table read them */
+#define PALETTE_CHANGED(byte_addr) \
+  (palette_changed[((byte_addr) >> 6) & 15] |= 1u << (((byte_addr) >> 1) & 31))
 extern u16 io_registers[512];
 extern u8 vram[1024 * 96];
 #ifdef GBA_DTCM_BUFFERS
@@ -360,7 +363,7 @@ extern u32 sram_bankcount;
 extern u32 flash_bank_cnt;
 extern u32 eeprom_size;
 
-extern u8 gamepak_backup[1024 * 128];
+extern u8 gamepak_backup[1024 * 64];   /* the save; a 1 Mbit flash: its selected bank (src/porting/gba_backup_bank.c) */
 
 // Page sticky bit routines
 extern u32 gamepak_sticky_bit[1024/32];

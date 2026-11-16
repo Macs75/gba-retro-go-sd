@@ -24,8 +24,9 @@ extern uint8_t __gba_hle_window[];
 static const gba_hle_desc gba_hle_games[] = {
     /* V-Rally 3: its polygon rasterizer, 0x03003AB0-0x03003D04 in IWRAM */
     { { 'A', 'V', 'R', 'E' }, 0x03003AB0u, 0x258u, hle_vrally3_run, HLE_BYTES(vrally3) },
-    /* Super Puzzle Fighter II: its sound mixing loops, 0x03000038-0x03000268 */
-    { { 'A', 'Z', '8', 'E' }, 0x03000038u, 0x234u, hle_spf2_run, HLE_BYTES(spf2) },
+    /* Super Puzzle Fighter II: its sound mixing loops, 0x03000038-0x03000268,
+     * and its line-interrupt dispatcher, 0x03002520-0x0300263C */
+    { { 'A', 'Z', '8', 'E' }, 0x03000038u, 0x2608u, hle_spf2_run, HLE_BYTES(spf2) },
 };
 
 GBA_COLD void gba_hle_select(const char *game_code)

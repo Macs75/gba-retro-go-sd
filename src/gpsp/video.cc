@@ -1048,6 +1048,21 @@ static const u8 obj_dim_table[3][4][2] = {
 static u8 obj_priority_list[5][160][OBJ_PER_LINE_MAX];
 static u8 obj_priority_count[5][160];
 static u8 obj_alpha_count[160];
+// the rows the lists hold (obj_rows_from..159) and the mode and sprite limit
+// they were built with (update_scanline)
+#ifndef HOST_BUILD
+#define VIDEO_TAIL_BSS __attribute__((section(".gba_tail_bss")))   /* no .bss shift */
+#else
+#define VIDEO_TAIL_BSS
+#endif
+static u32 obj_rows_from VIDEO_TAIL_BSS, obj_build_mode VIDEO_TAIL_BSS;
+static u16 obj_build_maxcyc VIDEO_TAIL_BSS;
+// ...up to obj_rows_to; the rows a build covers (OBJ_BAND for a game that
+// rewrites OAM during the frame, else to the bottom) and the frame's OAM builds
+#ifndef OBJ_BAND
+#define OBJ_BAND 16
+#endif
+static u8 obj_rows_to VIDEO_TAIL_BSS, obj_band VIDEO_TAIL_BSS, obj_builds VIDEO_TAIL_BSS;
 
 typedef struct {
   s32 obj_x, obj_y;
@@ -1605,21 +1620,19 @@ void render_scanline_objs(
 // into a sorted list by priority for the current row.
 // Invisible objects are discarded. ST-objects are flagged. Cycle counting is
 // performed to discard excessive objects (to match HW capabilities).
-static void order_obj(u32 video_mode)
+// Only rows [first_row, end_row): each row's list depends on that row alone,
+// so a range comes out as it would in a build of all 160 (see update_scanline).
+static void order_obj(u32 video_mode, u32 first_row, u32 end_row, u16 max_rend_cycles)
 {
   u32 obj_num;
   u32 row;
   t_oam *oam_base = (t_oam*)oam_ram;
   u16 rend_cycles[160];
 
-  bool hblank_free = read_ioreg(REG_DISPCNT) & 0x20;
-  u16 max_rend_cycles = !sprite_limit ? REND_CYC_MAX :
-                         hblank_free  ? REND_CYC_REDUCED :
-                                        REND_CYC_SCANLINE;
-
-  memset(obj_priority_count, 0, sizeof(obj_priority_count));
-  memset(obj_alpha_count, 0, sizeof(obj_alpha_count));
-  memset(rend_cycles, 0, sizeof(rend_cycles));
+  for (u32 p = 0; p < 5; p++)
+    memset(&obj_priority_count[p][first_row], 0, end_row - first_row);
+  memset(&obj_alpha_count[first_row], 0, end_row - first_row);
+  memset(&rend_cycles[first_row], 0, (end_row - first_row) * sizeof(rend_cycles[0]));
 
   for(obj_num = 0; obj_num < 128; obj_num++)
   {
@@ -1668,9 +1681,9 @@ static void order_obj(u32 video_mode)
       {
         u32 obj_priority = (obj_attr2 >> 10) & 0x03;
         bool is_affine = obj_attr0 & 0x100;
-        // Clip Y coord and height to the 0..159 interval
-        u32 starty = MAX(obj_y, 0);
-        u32 endy   = MIN(obj_y + obj_height, 160);
+        // Clip Y coord and height to the rows being built
+        u32 starty = MAX(obj_y, (s32)first_row);
+        u32 endy   = MIN(obj_y + obj_height, (s32)end_row);
 
         // Calculate needed cycles to render the sprite
         u16 cyccnt = is_affine ? (10 + obj_width * 2) : obj_width;
@@ -1796,6 +1809,109 @@ typedef enum
 // Bit 9 is set if the pixel belongs to a 1st target layer
 // Bit 10 is set if the pixel belongs to a 2nd target layer
 // Bit 11 is set if the pixel belongs to a ST-object
+// The colour-effect table: [i] palette colour i, [512 + i] colour i
+// darkened or brightened by BLDY -- indexed by a pixel's 9-bit colour and
+// its 1st-target bit (bit 9), the darken/brighten merges are one load per
+// pixel instead of expand, multiply, mask and fold (the same arithmetic,
+// done per palette entry). It follows the palette through palette_changed
+// (gba_memory.c's palette writes, savestate loads) and is rebuilt whole
+// when BLDY or the effect changes. A frame that would rebuild more than
+// FX_BUDGET entries (a game rewriting the palette or BLDY on every line)
+// computes per pixel for the rest of that frame instead.
+#define FX_BUDGET 2048u
+static u16 fx_tab[1024] VIDEO_TAIL_BSS;
+static u32 fx_key VIDEO_TAIL_BSS, fx_frame VIDEO_TAIL_BSS, fx_spent VIDEO_TAIL_BSS;
+// the last answer, for the line it was given on: the palette does not
+// change while a line is drawn, and a line with windows asks once per region
+static u32 fx_line_key VIDEO_TAIL_BSS, fx_line_frame VIDEO_TAIL_BSS, fx_line_v VIDEO_TAIL_BSS;
+static const u16 *fx_line_tab VIDEO_TAIL_BSS;
+
+static inline u16 fx_color(u32 c, u32 bright, u32 b)
+{
+  u32 epixel = (c | (c << 16)) & BLND_MSK;
+  u32 pa = !bright ? 0 : ((BLND_MSK * b) >> 4) & BLND_MSK;
+  u32 pb = ((epixel * (16 - b)) >> 4) & BLND_MSK;
+  epixel = (pa + pb) & BLND_MSK;
+  return (u16)((epixel >> 16) | epixel);
+}
+
+// the table for an effect (bright: 1 brighten, 0 darken; b the factor,
+// 0-16), or NULL: compute per pixel (this frame's rebuild budget is spent)
+static __attribute__((noinline)) const u16 *fx_table_build(u32 key, u32 bright, u32 b);
+
+static inline const u16 *fx_table(u32 bright, u32 b)
+{
+  u32 key = 0x10000u | (bright << 8) | b;
+  u32 v = read_ioreg(REG_VCOUNT);
+  if (key == fx_line_key && v == fx_line_v && frame_counter == fx_line_frame)
+    return fx_line_tab;
+  const u16 *t = fx_table_build(key, bright, b);
+  fx_line_key = key;
+  fx_line_v = v;
+  fx_line_frame = frame_counter;
+  fx_line_tab = t;
+  return t;
+}
+
+static __attribute__((noinline)) const u16 *fx_table_build(u32 key, u32 bright, u32 b)
+{
+  if (fx_frame != frame_counter) {
+    fx_frame = frame_counter;
+    fx_spent = 0;
+  }
+  if (key != fx_key) {
+    if (fx_spent + 512 > FX_BUDGET)
+      return NULL;
+    fx_spent += 512;
+    for (u32 i = 0; i < 512; i++) {
+      u16 c = palette_ram_converted[i];
+      fx_tab[i] = c;
+      fx_tab[512 + i] = fx_color(c, bright, b);
+    }
+    memset(palette_changed, 0, sizeof(palette_changed));
+    fx_key = key;
+    return fx_tab;
+  }
+  for (u32 w = 0; w < 16; w++) {
+    u32 m = palette_changed[w];
+    if (!m)
+      continue;
+    u32 n = __builtin_popcount(m);
+    if (fx_spent + n > FX_BUDGET)
+      return NULL;            // the table stays as it is; the bits wait
+    fx_spent += n;
+    palette_changed[w] = 0;
+    do {
+      u32 i = w * 32 + __builtin_ctz(m);
+      u16 c = palette_ram_converted[i];
+      fx_tab[i] = c;
+      fx_tab[512 + i] = fx_color(c, bright, b);
+      m &= m - 1;
+    } while (m);
+  }
+  return fx_tab;
+}
+
+// a semi-transparent sprite's pixel over the one below (merge_blend's)
+static inline u16 st_blend(u32 pixpair, u32 blend_a, u32 blend_b, bool can_saturate)
+{
+  u16 p1 = palette_ram_converted[(pixpair >>  0) & 0x1FF];
+  u16 p2 = palette_ram_converted[(pixpair >> 16) & 0x1FF];
+  u32 p1e = (p1 | (p1 << 16)) & BLND_MSK;
+  u32 p2e = (p2 | (p2 << 16)) & BLND_MSK;
+  u32 pfe = (((p1e * blend_a) + (p2e * blend_b)) >> 4);
+  if (can_saturate && (pfe & (OVFR_MSK | OVFG_MSK | OVFB_MSK))) {
+    if (pfe & OVFG_MSK)
+      pfe |= SATG_MSK;
+    if (pfe & OVFR_MSK)
+      pfe |= SATR_MSK;
+    if (pfe & OVFB_MSK)
+      pfe |= SATB_MSK;
+  }
+  pfe &= BLND_MSK;
+  return (u16)((pfe >> 16) | pfe);
+}
+
 // GCC: always inlined into render_w_effects (each merge has one call site
 // there): with its pre-drawn mode GCC emitted merge_blend<OBJ_BLEND, true>
 // out of line, in the flash -- the per-pixel loop of every screen with
@@ -1809,6 +1925,20 @@ void merge_blend(u32 start, u32 end, u16 *dst, u32 *src) {
   u32 blend_b = MIN(16, (bldalpha >> 8) & 0x1F);
 
   bool can_saturate = blend_a + blend_b > 16;
+
+  if (bldtype == BLEND_DARK || bldtype == BLEND_BRIGHT) {
+    const u16 *tab = fx_table(bldtype == BLEND_BRIGHT, brightf);
+    if (tab) {
+      while (start < end) {
+        u32 pixpair = src[start];
+        if (st_objs && (pixpair & 0x04000800) == 0x04000800)
+          dst[start++] = st_blend(pixpair, blend_a, blend_b, can_saturate);
+        else
+          dst[start++] = tab[pixpair & 0x3FF];
+      }
+      return;
+    }
+  }
 
   if (can_saturate) {
     // If blending can result in saturation, we need to clamp output values.
@@ -1889,6 +2019,15 @@ template <blendtype bldtype>
 static inline __attribute__((always_inline))   /* GCC: as merge_blend */
 void merge_brightness(u32 start, u32 end, u16 *srcdst) {
   u32 brightness = MIN(16, read_ioreg(REG_BLDY) & 0x1F);
+
+  const u16 *tab = fx_table(bldtype == BLEND_BRIGHT, brightness);
+  if (tab) {
+    while (start < end) {
+      srcdst[start] = tab[srcdst[start] & 0x3FF];
+      start++;
+    }
+    return;
+  }
 
   while (start < end) {
     u16 spix = srcdst[start];
@@ -2418,6 +2557,24 @@ static void window_segments(win_seg *seg, u32 *nseg, u32 start, u32 end,
   }
 }
 
+// The regions of a line depend only on the window control, WIN0H/WIN1H,
+// WININ/WINOUT and whether the line is inside each window vertically: one
+// plan per key, reused while consecutive lines share it (all 144 window
+// lines of a Super Puzzle Fighter II frame) instead of recomputed per line.
+struct win_plan {
+  u16 key, w0h, w1h, win, wout;
+  u8 nseg, use, all_same, mask;
+  win_seg seg[16];
+};
+static win_plan wplan VIDEO_TAIL_BSS;
+
+// whether window n covers this line (render_window_n_pass's test)
+static inline u32 window_on_line(u32 n, u32 vcount)
+{
+  u32 h = read_ioreg(REG_WINxH(n)), v = read_ioreg(REG_WINxV(n));
+  return in_window_y(vcount, v >> 8, v & 0xFF) && (h >> 8) != (h & 0xFF);
+}
+
 // 1 if it drew the line (windows 0 and/or 1, win_ctrl 1-3), 0 to leave it
 // to the per-region passes.
 static int render_window_one_pass(u16 *scanline, u32 win_ctrl)
@@ -2428,25 +2585,44 @@ static int render_window_one_pass(u16 *scanline, u32 win_ctrl)
     return 0;
   const layer_render_struct *rd = video_mode < 3 ? &tile_mode_renderers
                                                  : &bitmap_mode_renderers;
-  // the windows to test, 0 before 1 (stores, not a table: no new flash
-  // data in front of the renderer's)
-  u8 wins[2];
-  wins[0] = win_ctrl == 2;
-  wins[1] = 1;
-  win_seg seg[16];
-  u32 nseg = 0;
-  window_segments(seg, &nseg, 0, 240, wins, win_ctrl == 3 ? 2 : 1);
-
-  u32 mask = seg[0].mask, all_same = 1;
-  for (u32 i = 1; i < nseg; i++) {
-    if ((seg[i].mask ^ mask) & 0x1F)
-      return 0;                        // different layers: per region
-    all_same &= seg[i].mask == mask;
+  u32 vcount = read_ioreg(REG_VCOUNT);
+  u32 key = win_ctrl | 0x100;
+  if (win_ctrl & 1) key |= window_on_line(0, vcount) << 4;
+  if (win_ctrl & 2) key |= window_on_line(1, vcount) << 5;
+  win_plan *wp = &wplan;
+  if (wp->key != key || wp->w0h != read_ioreg(REG_WINxH(0)) || wp->w1h != read_ioreg(REG_WINxH(1)) ||
+      wp->win != read_ioreg(REG_WININ) || wp->wout != read_ioreg(REG_WINOUT)) {
+    wp->key = key;
+    wp->w0h = read_ioreg(REG_WINxH(0));
+    wp->w1h = read_ioreg(REG_WINxH(1));
+    wp->win = read_ioreg(REG_WININ);
+    wp->wout = read_ioreg(REG_WINOUT);
+    // the windows to test, 0 before 1 (stores, not a table: no new flash
+    // data in front of the renderer's)
+    u8 wins[2];
+    wins[0] = win_ctrl == 2;
+    wins[1] = 1;
+    u32 nseg = 0;
+    window_segments(wp->seg, &nseg, 0, 240, wins, win_ctrl == 3 ? 2 : 1);
+    wp->nseg = nseg;
+    u32 mask = wp->seg[0].mask, all_same = 1, use = 1;
+    for (u32 i = 1; i < nseg; i++) {
+      if ((wp->seg[i].mask ^ mask) & 0x1F)
+        use = 0;                         // different layers: per region
+      all_same &= wp->seg[i].mask == mask;
+    }
+    wp->use = use;
+    wp->all_same = all_same;
+    wp->mask = mask;
   }
+  if (!wp->use)
+    return 0;
+  u32 mask = wp->mask, nseg = wp->nseg;
+  const win_seg *seg = wp->seg;
   if (!layer_count || !(mask & 0x1F))
     return 0;                          // the backdrop path: per region
   u32 layers = mask & 0x1F;
-  if (all_same) {
+  if (wp->all_same) {
     render_w_effects(0, 240, scanline, mask, rd);
     return 1;
   }
@@ -2642,11 +2818,54 @@ void update_scanline(void)
 #endif
   GBA_PROF_START(GBA_PART_PPU);
   // If OAM has been modified since the last scanline has been updated then
-  // reorder and reprofile the OBJ lists.
+  // reorder and reprofile the OBJ lists -- the rows from this one down: the
+  // ones above are drawn already this frame. A line outside the built rows
+  // (further down, or above them in the next frame with OAM unchanged) gets
+  // its rows then, from the same OAM with the same mode and sprite limit as
+  // that build: the lists a 160-row build would have left (each row's list
+  // depends on that row alone).
+  // A game that rewrites OAM during the frame (a sprite multiplexer: Super
+  // Puzzle Fighter II, 19 builds a frame on a full board) refilled every row
+  // down to the bottom at each rewrite, most of them again a few lines later
+  // (3% of the device's time there): after a frame with more than one build,
+  // a build covers OBJ_BAND rows and the next rows are built as they come.
+  // One build a frame keeps the whole screen in one pass (one OAM walk).
+  if (vcount == 0) {
+    obj_band = obj_builds > 1 ? OBJ_BAND : 160;
+    obj_builds = 0;
+  }
+  u32 obj_end = vcount + (obj_band ? obj_band : 160);
+  if (obj_end > 160)
+    obj_end = 160;
   if(reg[OAM_UPDATED])
   {
-    order_obj(video_mode);
+    bool hblank_free = dispcnt & 0x20;
+    obj_build_maxcyc = !sprite_limit ? REND_CYC_MAX :
+                        hblank_free  ? REND_CYC_REDUCED :
+                                       REND_CYC_SCANLINE;
+    obj_build_mode = video_mode;
+    order_obj(video_mode, vcount, obj_end, obj_build_maxcyc);
+    obj_rows_from = vcount;
+    obj_rows_to = obj_end;
     reg[OAM_UPDATED] = 0;
+    if (obj_builds < 255)
+      obj_builds++;
+  }
+  else if (vcount < obj_rows_from && obj_end >= obj_rows_from)
+  {
+    order_obj(obj_build_mode, vcount, obj_rows_from, obj_build_maxcyc);
+    obj_rows_from = vcount;
+  }
+  else if (vcount == obj_rows_to)
+  {
+    order_obj(obj_build_mode, vcount, obj_end, obj_build_maxcyc);
+    obj_rows_to = obj_end;
+  }
+  else if (vcount < obj_rows_from || vcount > obj_rows_to)
+  {
+    order_obj(obj_build_mode, vcount, obj_end, obj_build_maxcyc);
+    obj_rows_from = vcount;
+    obj_rows_to = obj_end;
   }
 
   order_layers((dispcnt >> 8) & active_layers[video_mode], vcount);

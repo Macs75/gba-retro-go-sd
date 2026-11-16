@@ -63,6 +63,11 @@ SECTIONS
     . = ALIGN(. - 0xd24, 0x2000) + 0xd24;
     build/video.o (.text._Z13render_object*)
     build/video.o (.text._ZL16render_w_effects*)
+    /* order_obj and the blended sprite renderers after it at their measured
+     * place mod 8 KB (0x240540b4: Super Puzzle Fighter II runs 5-7) whatever
+     * render_w_effects' size: it grew 924 bytes with the effect table's
+     * loops. The section starts 0x1000 mod 8 KB, hence 0x10b4. */
+    . = ALIGN(. - 0x10b4, 0x2000) + 0x10b4;
     build/video.o (.text._ZL9order_obj*)
     /* The blending path's sprite renderers (32-bit line buffer, the indexed
      * and stacked-colour instances) and the per-line window/effects driver:
@@ -100,6 +105,7 @@ SECTIONS
       build/gba_scale.o
       build/hle_vrally3.o
       build/hle_spf2.o
+      build/gba_backup_bank.o
     ) *(.text .text*)
 
     /* cpu.o / m4a_gpsp.o run from ITCM. Their *rodata* must stay in RAM
@@ -111,6 +117,28 @@ SECTIONS
 
     *(.glue_7)
     *(.glue_7t)
+
+    /* The per-line window code (video.cc render_window_one_pass, run on
+     * every line of a screen with windows; from the flash it was ~2% of the
+     * device's time, Super Puzzle Fighter II): last, so adding it moved none
+     * of the hot code above. */
+    build/video.o (.text._ZL22render_window_one_passPtj .text._ZL15window_segments*)
+    build/video.o (.text._ZL14fx_table_build*)   /* once per line with an effect */
+    /* a game HLE's code too big for the ITCM window (src/hle): in RAM, first
+     * -- Super Puzzle Fighter II's line-interrupt paths run ~180 times a
+     * frame, at their measured place mod 8 KB (I-cache sets) beside the
+     * drawing code above; behind them the rest (the idle detector's search:
+     * linked in front, it moved them onto order_obj's sets and the early
+     * match's drawing cost +13-20%, 2026-11-16 run 11) */
+    *(.gba_ram_text.spf2*)
+    *(.gba_ram_text*)
+    /* The 16-bit sprite renderers for indexed colour (a dimmed or faded
+     * screen's lines without semi-transparent sprites) and for copy (sprite
+     * windows): from the flash their cost moved with gba.xip's place at every
+     * update (Super Puzzle Fighter II's early match: 0% -> 1.5% of the
+     * device's time from one push to the next, 2026-11-16) */
+    build/video.o (.text._Z20render_scanline_objsItL8rendtype1EEvjjjPvPKt*)
+    build/video.o (.text._Z20render_scanline_objsItL8rendtype3EEvjjjPvPKt*)
 
     . = ALIGN(4);
     __CORE_INIT_ARRAY_START__ = .;
@@ -142,6 +170,14 @@ SECTIONS
     build/video.o (.text._Z24render_affine_backgroundItL8rendtype0E*Lb0EEv*)
     build/video.o (.text._Z24render_affine_backgroundItL8rendtype1ELb?ELb1ELb1ELb0EEv*)
     build/video.o (.text._Z24render_affine_backgroundIjL8rendtype2ELb?ELb1ELb1ELb0EEv*)
+    /* ...and the bitmap-mode renderers (modes 3-5, every colour path) and
+     * the window drivers: from the flash their cost moved with gba.xip's
+     * place at every update -- V-Rally 3's bitmap-mode race +24% drawing
+     * from one push to the next, no renderer change (2026-11-17). Last, so
+     * nothing in front of them moves. The rest of video.o (12.9 KB of
+     * rarer rotated/scaled variants: mosaic, wrap, colour paths) stays in
+     * the flash: RAM_EMU has no room for it (7 KB short with .bss's pin). */
+    build/video.o (.text.*bitmap* .text.*window*)
     . = ALIGN(8);
   } >RAM_EMU
 
@@ -253,6 +289,7 @@ SECTIONS
     build/gba_timing.o (.text .text*)
     build/gba_idle.o (.text .text*)
     build/gba_scale.o (.text .text*)
+    build/gba_backup_bank.o (.text .text*)
     *(.gba_cold_text*)       /* cold cpu.o code: power-on, savestates */
   } >GBA_CODE
 

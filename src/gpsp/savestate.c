@@ -148,6 +148,7 @@ bool gba_load_state(const void* src)
   {
      palette_ram_converted[i] = convert_palette(eswap16(palette_ram[i]));
   }
+  memset(palette_changed, 0xFF, sizeof(palette_changed));
 
   video_reload_counters();
 
@@ -213,6 +214,7 @@ bool gba_load_state_slim(const void* src)
    * in the colours of the one you left. */
   for(i = 0; i < 512; i++)
      palette_ram_converted[i] = convert_palette(eswap16(palette_ram[i]));
+  memset(palette_changed, 0xFF, sizeof(palette_changed));
 
   return true;
 }

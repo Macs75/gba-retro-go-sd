@@ -125,6 +125,19 @@ void gba_idle_enable(void)
  * outright cost 18 of the 150 games most of their skip (Broken Sword 12K
  * interpreted instructions a frame -> 73K). A loop whose passes differ is
  * remembered by its exact head instead. */
+extern uint32_t game_hle_pc, game_hle_size;   /* gba_memory.c: a game HLE's guest range */
+
+/* The decoder and the loop search: in RAM_EMU (ld/gba_core.ld .gba_ram_text),
+ * not the flash -- they run whenever two events land near each other outside
+ * an armed loop: with a line interrupt that is dozens of times a frame, each
+ * from cold flash lines (1.6% of the device's time, Super Puzzle Fighter II's
+ * full board). */
+#ifndef HOST_BUILD
+#define IDLE_RAM __attribute__((section(".gba_ram_text.idle")))
+#else
+#define IDLE_RAM
+#endif
+
 #ifndef HOST_BUILD
 #define GBA_IDLE_HOT __attribute__((section(".gba_itcm_text")))
 /* its own section: ld/gba_core.ld keeps it at one place mod 32 */
@@ -143,7 +156,7 @@ GBA_IDLE_HOT static int blacklisted(uint32_t pc)
     return 0;
 }
 
-static void blacklist(uint32_t pc)
+IDLE_RAM static void blacklist(uint32_t pc)
 {
     if (!blacklisted(pc))
         black[black_n++ % NBLACK] = pc >> 6;
@@ -157,7 +170,7 @@ GBA_IDLE_HOT static int head_rejected(uint32_t h)
     return 0;
 }
 
-static const uint8_t *code_at(uint32_t a)
+IDLE_RAM static const uint8_t *code_at(uint32_t a)
 {
     const uint8_t *p = memory_map_read[a >> 15];
     return p ? p + (a & 0x7FFFu) : NULL;
@@ -165,7 +178,7 @@ static const uint8_t *code_at(uint32_t a)
 
 /* 1 if the Thumb instruction may sit in a poll loop; *target = a branch's
  * target (or 0xFFFFFFFF) */
-static int thumb_ok(uint32_t a, uint16_t op, uint32_t *target)
+IDLE_RAM static int thumb_ok(uint32_t a, uint16_t op, uint32_t *target)
 {
     *target = 0xFFFFFFFFu;
     if (op < 0x4400)                       /* shifts, add/sub, mov/cmp/add/sub #, ALU */
@@ -196,7 +209,7 @@ static int thumb_ok(uint32_t a, uint16_t op, uint32_t *target)
     return 0;                              /* stack, LDM/STM, SWI, BL, ADD SP */
 }
 
-static int arm_ok(uint32_t a, uint32_t op, uint32_t *target)
+IDLE_RAM static int arm_ok(uint32_t a, uint32_t op, uint32_t *target)
 {
     *target = 0xFFFFFFFFu;
     if ((op >> 28) == 0xF)
@@ -233,7 +246,7 @@ static int arm_ok(uint32_t a, uint32_t op, uint32_t *target)
 
 /* the poll loop the PC is in, from the PC forward to the backward branch
  * closing it: 1 and its head / last instruction, or 0 */
-static int find_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *t)
+IDLE_RAM static int find_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *t)
 {
     uint32_t step = thumb ? 2u : 4u, a = pc, tgt;
     for (uint32_t i = 0; i < MAX_BODY; i++, a += step) {
@@ -284,7 +297,7 @@ static int find_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *t)
 static uint32_t path_pc[MAX_BODY] IDLE_TAIL_BSS, path_tgt[MAX_BODY] IDLE_TAIL_BSS, path_steps IDLE_TAIL_BSS;
 static uint8_t path_taken[MAX_BODY] IDLE_TAIL_BSS;
 
-static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
+IDLE_RAM static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
 {
     if (depth && a == pc)
         return (int)(path_steps = depth), 1;
@@ -315,7 +328,7 @@ static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
 
 /* noinline: it runs only when a loop is armed; inlined, it grew the ITCM
  * hook (gba_idle_event) and moved the code after it */
-__attribute__((noinline)) static int find_poll_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *l, uint32_t *t)
+IDLE_RAM __attribute__((noinline)) static int find_poll_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *l, uint32_t *t)
 {
     if (find_loop(pc, thumb, h, t)) {
         *l = *h;
@@ -357,6 +370,12 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
         return;                            /* still in the armed loop */
     if (pc == 0xFFFFFFFFu || thumb != prev_thumb || pc - prev + NEAR > 2u * NEAR)
         return;                            /* not two events in one short loop */
+    if (pc - game_hle_pc < game_hle_size)
+        return;                            /* a game HLE runs it natively (src/hle):
+                                            * a slice ends there when the routine
+                                            * stops mid-loop -- no poll loop to
+                                            * find (Super Puzzle Fighter II's
+                                            * mixer: ~39 decodes a frame) */
     if (blacklisted(pc) && (++black_hits % RETRY))
         return;
     uint32_t l;

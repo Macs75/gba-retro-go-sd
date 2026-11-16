@@ -69,7 +69,8 @@ bool sound_alloc_dtcm(void *(*alloc)(size_t, size_t));
 extern uint8_t   bios_rom[16 * 1024];
 #define GBA_BIOS_ROM_SIZE sizeof(bios_rom)
 #endif
-extern uint8_t   gamepak_backup[128 * 1024];
+extern uint8_t   gamepak_backup[64 * 1024];   /* a 1 Mbit flash: one bank (gba_backup_bank.c) */
+#include "porting/gba_backup_bank.h"
 extern const uint8_t open_gba_bios_rom[];
 
 void     init_main(void);
@@ -453,7 +454,9 @@ static void gba_SramSave(void)
     char *path = odroid_system_get_path(ODROID_PATH_SAVE_SRAM, ACTIVE_FILE->path);
     FILE *f = fopen(path, "wb");
     if (f != NULL) {
-        fwrite(gamepak_backup, 1, sizeof(gamepak_backup), f);
+        /* the 128 KB image: the bank in RAM and the one on file */
+        if (!gba_backup_export(f))
+            printf("gba: the cart save could not be written completely to %s\n", path);
         fclose(f);
     }
     free(path);
@@ -462,9 +465,10 @@ static void gba_SramSave(void)
 static void gba_SramLoad(void)
 {
     char *path = odroid_system_get_path(ODROID_PATH_SAVE_SRAM, ACTIVE_FILE->path);
+    gba_backup_reset(path);   /* the other bank's file sits next to the save */
     FILE *f = fopen(path, "rb");
     if (f != NULL) {
-        fread(gamepak_backup, 1, sizeof(gamepak_backup), f);
+        gba_backup_import(f, GBA_BACKUP_IMAGE_BYTES);
         fclose(f);
     }
     free(path);
@@ -1146,6 +1150,11 @@ void app_main_gba(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 
     gba_load_bios();
     memset(gamepak_backup, 0xFF, sizeof(gamepak_backup));
+    {
+        char *save = odroid_system_get_path(ODROID_PATH_SAVE_SRAM, ACTIVE_FILE->path);
+        gba_backup_reset(save);
+        free(save);
+    }
 
     /* The ROM is up to 32MB and stays in external flash, memory-mapped. Nothing
      * is copied into RAM and nothing is paged: the core reads the cart where it

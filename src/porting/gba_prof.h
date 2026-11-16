@@ -56,6 +56,11 @@ void gba_prof_quit(void);
  * dropped because the last swap was still pending, waited = the audio
  * pacing slept (the frame was on time) */
 void gba_prof_frame_end(int drawn, int fw_skip, int vskip, int waited);
+/* a replay or recording starts: the windows count its frames from here, so
+ * window N is replay frames 120N..120N+119 on every run (and the host's
+ * REC/icount lines): otherwise the frames before it (the boot, the menus)
+ * shift every window by a different amount each run */
+void gba_prof_window_restart(void);
 
 #ifdef __cplusplus
 }
@@ -66,6 +71,7 @@ void gba_prof_frame_end(int drawn, int fw_skip, int vskip, int waited);
 #define GBA_PROF_INIT(n, r)      gba_prof_init((n), (r))
 #define GBA_PROF_MARK(p)         gba_prof_mark(p)
 #define GBA_PROF_FRAME_END(d, s, v, w) gba_prof_frame_end((d), (s), (v), (w))
+#define GBA_PROF_WINDOW_RESTART() gba_prof_window_restart()
 
 #else
 
@@ -73,6 +79,7 @@ void gba_prof_frame_end(int drawn, int fw_skip, int vskip, int waited);
 #define GBA_PROF_STOP(x)         ((void)0)
 #define GBA_PROF_INIT(n, r)      ((void)0)
 #define GBA_PROF_MARK(p)         ((void)0)
+#define GBA_PROF_WINDOW_RESTART() ((void)0)
 #define GBA_PROF_FRAME_END(d, s, v, w) ((void)0)
 
 #endif

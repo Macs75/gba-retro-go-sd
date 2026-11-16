@@ -40,7 +40,8 @@ src/porting/gba_bios_hle.c \
 src/m4a/m4a_hle.c \
 src/m4a/m4a_gpsp.c \
 src/porting/bilinear.c \
-src/hle/gba_hle_table.c
+src/hle/gba_hle_table.c \
+src/porting/gba_backup_bank.c
 
 CORE_CXX_SOURCES := \
 src/gpsp/cpu.cc \

@@ -716,6 +716,7 @@ static __attribute__((noinline)) u32 arm_reg_offset(u32 opcode, u32 c_flag)
   if(new_pc_region != pc_region)                                              \
   {                                                                           \
     pc_region = new_pc_region;                                                \
+    fetch_row = ws_cyc_seq[(new_pc_region >> 9) & 0xF];                       \
     pc_address_block = memory_map_read[new_pc_region];                        \
     touch_gamepak_page(pc_region);                                            \
                                                                               \
@@ -1858,6 +1859,12 @@ u8 *memory_map_read [8 * 1024];
 u16 oam_ram[512];
 u16 palette_ram[512];
 u16 palette_ram_converted[512];
+/* palette_ram_converted entries written since video.cc's effect table read
+ * them (a bit per entry; the palette writers set it) */
+#ifndef HOST_BUILD
+__attribute__((section(".gba_tail_bss")))
+#endif
+u32 palette_changed[16];
 u8 ewram[GBA_EWRAM_ALLOC];
 u8 iwram[GBA_IWRAM_ALLOC];
 u8 vram[1024 * 96];
@@ -1879,22 +1886,36 @@ static const u16 arm_cond_pass[16] = {
   0xF0F0, 0x0F0F, 0xCCCC, 0x3333, 0xFF00, 0x00FF, 0xAAAA, 0x5555, 0x0C0C, 0xF3F3, 0xAA55, 0x55AA, 0x0A05, 0xF5FA, 0xFFFF, 0x0000
 };
 
-/* The end of every Thumb handler (threaded dispatch, see thumb_tbl): the
- * cycle charge, the idle head, the cycles left (an alert is folded in:
+/* The end of every Thumb handler (threaded dispatch, see thumb_tbl).
+ *
+ * THUMB_NEXT_JUMP, after an instruction that may have moved the PC anywhere
+ * (branches, BL, BX, POP {pc}, a hi-register op writing the PC): the cycle
+ * charge, the idle head, the cycles left (an alert is folded in:
  * CPU_ALERT_OR), then -- the PC still on the fetched page and even -- the
  * next opcode and the jump to its handler; anything else goes the slow way
- * through thumb_loop_pc. Host debug builds that hook the fetch (PC
- * histogram, M4A instruction count) take the shared copy. */
+ * through thumb_loop_pc.
+ *
+ * THUMB_NEXT, after every other instruction (the PC moved on by 2): first
+ * the page test (a new page, or an odd PC, takes thumb_post, the full
+ * path), then the fetch charge from fetch_row -- this page's wait-state row,
+ * the same entry the full charge computes from the PC -- the cycles left,
+ * the next opcode. No idle-head test: a poll loop's head is reached by its
+ * branch on every pass (the ARM loop tests it only after jumps too). ~8
+ * fewer instructions per Thumb instruction.
+ *
+ * Host debug builds that hook the fetch (PC histogram, M4A instruction
+ * count) take the shared copy. */
 #if defined(GBA_PCHIST) || defined(M4A_COUNT_INSNS) || defined(TRACE_INSTRUCTIONS) || \
     defined(GBA_THUMB_OPHIST)
 #define THUMB_NEXT() goto thumb_post
+#define THUMB_NEXT_JUMP() goto thumb_post
 #else
 #ifdef GBA_ICOUNT
 #define THUMB_ICOUNT() gba_icount++
 #else
 #define THUMB_ICOUNT()
 #endif
-#define THUMB_NEXT()                                                          \
+#define THUMB_NEXT_JUMP()                                                     \
   {                                                                           \
     PC_CHECK();                                                               \
     cycles_remaining -= ws_cyc_seq[(pc >> 24) & 0xF][0];                      \
@@ -1905,6 +1926,18 @@ static const u16 arm_cond_pass[16] = {
       goto thumb_out;                                                         \
     if (__builtin_expect(((pc >> 15) != pc_region) | (pc & 1), 0))            \
       goto thumb_loop_pc;                                                     \
+    opcode = readaddress16(pc_address_block, (pc & 0x7FFF));                  \
+    goto *thumb_tbl[opcode >> 8];                                             \
+  }
+#define THUMB_NEXT()                                                          \
+  {                                                                           \
+    PC_CHECK();                                                               \
+    if (__builtin_expect(((pc >> 15) != pc_region) | (pc & 1), 0))            \
+      goto thumb_post;                                                        \
+    cycles_remaining -= fetch_row[0];                                         \
+    THUMB_ICOUNT();                                                           \
+    if (__builtin_expect(cycles_remaining <= 0, 0))                           \
+      goto thumb_out;                                                         \
     opcode = readaddress16(pc_address_block, (pc & 0x7FFF));                  \
     goto *thumb_tbl[opcode >> 8];                                             \
   }
@@ -2231,6 +2264,10 @@ void execute_arm(u32 cycles)
   u32 n_flag, z_flag, c_flag, v_flag;
   u32 pc_region = (reg[REG_PC] >> 15);
   u8 *pc_address_block = memory_map_read[pc_region];
+  /* the wait states of the PC's region (its ws_cyc_seq row): the fetch
+   * charge of a sequential Thumb instruction (THUMB_NEXT); the live table,
+   * so a WAITCNT write still counts at once */
+  const u8 *fetch_row = ws_cyc_seq[(pc_region >> 9) & 0xF];
   u32 new_pc_region;
   s32 cycles_remaining;
   u32 update_ret;
@@ -3882,7 +3919,9 @@ m4a_resume:
 
     collapse_flags();
     if (idle_loop_cond == IDLE_COND_GENERIC)
-       gba_idle_event(reg[REG_PC], 0);      /* an event: arm a poll loop (gba_idle.c) */
+       /* the T bit, not 0: a game HLE (src/hle) may stop inside Thumb code
+        * and return here, through the ARM loop */
+       gba_idle_event(reg[REG_PC], (reg[REG_CPSR] >> 5) & 1);   /* an event: arm a poll loop (gba_idle.c) */
     update_ret = update_gba(cycles_remaining);
     if (completed_frame(update_ret))
        return;
@@ -4132,7 +4171,7 @@ thumb_loop_pc:
           case 0x44: thl_19:
              /* ADD rd, rs */
              thumb_hireg_op(reg[rd] + reg[rs]);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
 
           case 0x45: thl_20:
              /* CMP rd, rs */
@@ -4150,7 +4189,7 @@ thumb_loop_pc:
           case 0x46: thl_21:
              /* MOV rd, rs */
              thumb_hireg_op(reg[rs]);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
 
           case 0x47: thl_22:
              /* BX rs */
@@ -4174,7 +4213,7 @@ thumb_loop_pc:
                    goto arm_loop;
                 }
              }
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
 
           case 0x48 ... 0x4F: thl_23:
              /* LDR r0..7, [pc + imm] */
@@ -4313,7 +4352,7 @@ thumb_loop_pc:
           case 0xBD: thl_57:  /* POP rlist, pc */
              CPU_ALERT_OR(exec_thumb_block_mem<AccLoad, AddrPostInc>(
                REG_SP, (opcode & 0xFF) | (1 << REG_PC), cycles_remaining)); pc = reg[REG_PC];
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
 
           case 0xC0 ... 0xC7: thl_58:    /* STMIA r0..7!, rlist */
              CPU_ALERT_OR(exec_thumb_block_mem<AccStore, AddrPostInc>(
@@ -4327,46 +4366,46 @@ thumb_loop_pc:
 
           case 0xD0: thl_60:   /* BEQ label */
              thumb_conditional_branch(z_flag == 1);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD1: thl_61:   /* BNE label */
              thumb_conditional_branch(z_flag == 0);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD2: thl_62:   /* BCS label */
              thumb_conditional_branch(c_flag == 1);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD3: thl_63:   /* BCC label */
              thumb_conditional_branch(c_flag == 0);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD4: thl_64:   /* BMI label */
              thumb_conditional_branch(n_flag == 1);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD5: thl_65:   /* BPL label */
              thumb_conditional_branch(n_flag == 0);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD6: thl_66:   /* BVS label */
              thumb_conditional_branch(v_flag == 1);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD7: thl_67:   /* BVC label */
              thumb_conditional_branch(v_flag == 0);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD8: thl_68:   /* BHI label */
              thumb_conditional_branch(c_flag & (z_flag ^ 1));
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xD9: thl_69:   /* BLS label */
              thumb_conditional_branch((c_flag == 0) | z_flag);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xDA: thl_70:   /* BGE label */
              thumb_conditional_branch(n_flag == v_flag);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xDB: thl_71:   /* BLT label */
              thumb_conditional_branch(n_flag != v_flag);
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xDC: thl_72:   /* BGT label */
              thumb_conditional_branch((z_flag == 0) & (n_flag == v_flag));
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
           case 0xDD: thl_73:   /* BLE label */
              thumb_conditional_branch(z_flag | (n_flag != v_flag));
-             THUMB_NEXT();
+             THUMB_NEXT_JUMP();
 
           case 0xDF: thl_74:
              collapse_flags();
@@ -4398,7 +4437,7 @@ thumb_loop_pc:
                 s32 br_offset = ((s32)(offset << 21) >> 20) + 4;
                 thumb_pc_offset(br_offset);
                 cycles_remaining -= ws_cyc_nseq[pc >> 24][0];
-                THUMB_NEXT();
+                THUMB_NEXT_JUMP();
              }
 
           case 0xF0 ... 0xF7: thl_76:
@@ -4419,7 +4458,7 @@ thumb_loop_pc:
                 reg[REG_LR] = newlr;
                 reg[REG_PC] = pc = newpc;
                 cycles_remaining -= ws_cyc_nseq[newpc >> 24][0];
-                THUMB_NEXT();
+                THUMB_NEXT_JUMP();
              }
        }
 

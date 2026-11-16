@@ -64,6 +64,12 @@ attached to the release:
   while a replay runs (the firmware's SysTick through a handler in ITCM): `<game>.pcs` next
   to the ROM, one histogram per 1800 replay frames, read with
   `tools/gba_pcs_report.py` and the build's ELF.
+- Host: `GBA_CALLGRIND_FROM=N` (callgrind's counting starts at frame N,
+  exactly: `tools/gba_callgrind_window.sh`), `HOST_PCHIST=0` (builds the
+  device's Thumb tails on the host), `GBA_BACKUP_SELFTEST=<dir>` (the 64 KB
+  save's bank switching against a reference); `tools/gba_fn_codegen.sh`, one
+  object in the release toolchain with a function's size, stack accesses and
+  literal loads (a register-pressure check).
 - Host: `GBA_FAST=1`, `GBA_EXIT_FRAME=N`, `GBA_FRAMESKIP=N`, `GBA_RECORD=1` /
   `GBA_REPLAY=1` (`GBA_REC_AT=N`), `GBA_HASH_EVERY=N`, `GBA_INPUT_RAW=<file>`.
 
@@ -196,6 +202,50 @@ attached to the release:
   frames (default 1800; 120 gives one per `PROF/` window). A PROF build
   without the sampler keeps the sampler build's code and data placement
   (its room kept as padding), so the two compare directly.
+
+- **The cart save takes 64 KB of RAM instead of 128 KB.** A 1 Mbit flash
+  save (Pokémon) keeps one 64 KB bank in RAM; the other bank's sectors are
+  read and written to `<rom>.gba.sram.bank0` / `.bank1` next to the save,
+  one 4 KB sector at a time and only when the game switches banks (no long
+  pause). The save file itself is unchanged (the full 128 KB image), and
+  so are recordings. Device, Pokémon Ruby: in-game saves, reloads and a new
+  game's save over the old one all correct. Frees 64 KB of the core's RAM.
+- Renderer: the darken/brighten effects (a fade, a dimmed screen) are one
+  table load per pixel: a 1,024-entry table per BLDY value follows the
+  palette writes (rebuilt within a budget of 2,048 entries a frame, else
+  computed per pixel as before). A line with windows plans its regions once
+  per window setting and draws each layer once over all of them, and the
+  window code runs from RAM. Device, Super Puzzle Fighter II's match:
+  drawing -14 to -23% per drawn frame.
+- Renderer: a game that rewrites its sprite table during the frame (a
+  sprite multiplexer) has its sprite lists built 16 lines at a time, not
+  down to the bottom at every rewrite (each line's list depends on that
+  line only: the same lists). Super Puzzle Fighter II's full board: half
+  the list writes, drawing -3.5%, 45.6 -> 47.0 frames shown a second.
+- The 16-bit sprite renderers for indexed colour and sprite windows, every
+  bitmap-mode renderer (modes 3-5) and the window drivers run from RAM, not
+  the flash: from the flash their cost changed with where gba.xip landed at
+  each update (Super Puzzle Fighter II's early match +15-20% drawing,
+  V-Rally 3's race +24%, with no renderer change). Device, V-Rally 3's
+  race: drawing 1.51M -> 1.16M cycles per drawn frame, 1,940 -> 1,040
+  frames not drawn over the replay.
+- Interpreter: a Thumb instruction that leaves the PC on the next one
+  tests the page first and charges the fetch from that page's wait-state
+  row, without the poll-loop head test (a loop head is reached by its
+  branch): ~8 fewer instructions each. Device: game code -4.5% in Super
+  Puzzle Fighter II, -5.3% in Kirby & The Amazing Mirror (peak 82 -> 78% of
+  the frame budget).
+- Super Puzzle Fighter II: its line interrupt (183 a frame, a sprite
+  multiplexer that works on 3-6 of them) runs natively on the lines where
+  its handler only compares and returns -- the BIOS entry, the game's
+  dispatcher and handler, ~25% of the match's instructions -- with the
+  interpreter's exact state; a slice that ends inside it resumes there.
+  Device, the full board: 40 -> 45 frames shown a second with the Thumb
+  change above.
+- The generic poll-loop search runs from RAM and ignores PCs inside a game
+  HLE's routine; the scaler's row lane runs from ITCM.
+- `PROF/` windows restart when a replay or recording starts, so two runs of
+  one recording pair window by window.
 
 - The per-game idle tables (gpSP's `gba_over.h`, `gba_idle_loop.c` and the
   two hand-listed VCOUNT polls) are off: on 37 of the 47 games of the set
