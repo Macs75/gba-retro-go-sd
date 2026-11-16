@@ -205,6 +205,9 @@ $(BUILD_DIR)/hle_vrally3.o:      OPT := -O2
 $(BUILD_DIR)/hle_spf2.o:         OPT := -O2
 $(BUILD_DIR)/sound.o:            OPT := -O2
 $(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2
+# the bundled BIOS is .incbin'd (src/porting/gba_bios.S): a change to the
+# image must reassemble its object
+$(BUILD_DIR)/gba_bios.o: src/gpsp/bios/open_gba_bios.bin
 # GCC: -mlong-calls makes the M4A mixers copy-safe: their calls into the
 # ITCM memory helpers load absolute addresses from their own literal pools
 # instead of a PC-relative bl to a veneer that stays behind in the flash

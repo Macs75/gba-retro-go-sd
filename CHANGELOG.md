@@ -64,6 +64,10 @@ attached to the release:
   while a replay runs (the firmware's SysTick through a handler in ITCM): `<game>.pcs` next
   to the ROM, one histogram per 1800 replay frames, read with
   `tools/gba_pcs_report.py` and the build's ELF.
+- Host: `GBA_WAV=<file>` (every sample the core produces, as a WAV, also
+  unthrottled) and `GBA_DUMP=N:<file>` (EWRAM + IWRAM at frame N, read
+  through the core), for comparing a game's sound and state with another
+  emulator.
 - Host: `GBA_CALLGRIND_FROM=N` (callgrind's counting starts at frame N,
   exactly: `tools/gba_callgrind_window.sh`), `HOST_PCHIST=0` (builds the
   device's Thumb tails on the host), `GBA_BACKUP_SELFTEST=<dir>` (the 64 KB
@@ -255,6 +259,13 @@ attached to the release:
 
 ### Fixed
 
+- **Sampled music played random notes in games that ask the BIOS for a
+  note's playback rate** (WarioWare: Twisted!): the bundled open BIOS had
+  nine addresses linked for the cartridge (0x0800xxxx) instead of itself, so
+  `MidiKey2Freq` (SWI 0x1F) read its pitch table from the game's ROM. They
+  are rebased in `src/gpsp/bios/open_gba_bios.bin` (found by comparing RAM
+  and a CPU trace with mGBA). A real BIOS in `/bios/gba/` was never affected.
+  The BIOS objects now rebuild when the image changes.
 - Games without the M4A sound driver spent ~2M cycles a frame (a third of
   the frame) for their first 600 frames on the search for its mixer: a
   memcmp per variant at each of 8,192 IWRAM offsets. An offset now gets the

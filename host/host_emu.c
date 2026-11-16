@@ -418,10 +418,51 @@ void audio_clear_buffers(void)
 
 static int host_fast(void);
 
+/* GBA_WAV=<file>: every sample the core produces (mono, 16-bit, the core's
+ * rate), also with GBA_FAST: for listening to / comparing the audio of a
+ * replay. A minimal WAV header, its sizes patched at exit. */
+static FILE *host_wav;
+static uint32_t host_wav_bytes;
+static void host_wav_close(void)
+{
+    if (!host_wav)
+        return;
+    uint32_t riff = 36 + host_wav_bytes;
+    fseek(host_wav, 4, SEEK_SET);  fwrite(&riff, 4, 1, host_wav);
+    fseek(host_wav, 40, SEEK_SET); fwrite(&host_wav_bytes, 4, 1, host_wav);
+    fclose(host_wav);
+    host_wav = NULL;
+}
+static void host_wav_write(const int16_t *b, int n)
+{
+    static int init;
+    if (!init) {
+        init = 1;
+        const char *e = getenv("GBA_WAV");
+        if (e && e[0] && (host_wav = fopen(e, "wb"))) {
+            const uint32_t rate = GBA_SOUND_FREQUENCY, byterate = rate * 2;
+            const uint16_t fmt = 1, ch = 1, align = 2, bits = 16;
+            const uint32_t zero = 0, fmtlen = 16;
+            fwrite("RIFF", 1, 4, host_wav); fwrite(&zero, 4, 1, host_wav);
+            fwrite("WAVEfmt ", 1, 8, host_wav); fwrite(&fmtlen, 4, 1, host_wav);
+            fwrite(&fmt, 2, 1, host_wav); fwrite(&ch, 2, 1, host_wav);
+            fwrite(&rate, 4, 1, host_wav); fwrite(&byterate, 4, 1, host_wav);
+            fwrite(&align, 2, 1, host_wav); fwrite(&bits, 2, 1, host_wav);
+            fwrite("data", 1, 4, host_wav); fwrite(&zero, 4, 1, host_wav);
+            atexit(host_wav_close);
+        }
+    }
+    if (host_wav && n > 0) {
+        fwrite(b, 2, (size_t)n, host_wav);
+        host_wav_bytes += (uint32_t)n * 2;
+    }
+}
+
 void common_emu_sound_sync(bool use_nops)
 {
     (void)use_nops;
     host_poll_events();
+    host_wav_write(audio_get_active_buffer(), audio_get_buffer_length());
     if (audio_started && !audio_muted && !audio_mute && !host_fast()) {
         int16_t *buf = audio_get_active_buffer();
         uint16_t len = audio_get_buffer_length();
@@ -524,6 +565,33 @@ bool common_emu_frame_loop(void)
         CALLGRIND_ZERO_STATS;
         CALLGRIND_START_INSTRUMENTATION;
     }
+    {   /* GBA_DUMP=N:<file>: EWRAM (256 KB) then IWRAM (32 KB) at loop frame N,
+         * read through the core (read_memory32), for offline inspection */
+        static long dump_at = -2;
+        static char dump_path[256];
+        if (dump_at == -2) {
+            const char *e = getenv("GBA_DUMP");
+            dump_at = -1;
+            if (e && sscanf(e, "%ld:%255s", &dump_at, dump_path) != 2)
+                dump_at = -1;
+        }
+        if (dump_at >= 0 && frames == (uint32_t)dump_at) {
+            extern unsigned int read_memory32(unsigned int address);
+            FILE *f = fopen(dump_path, "wb");
+            if (f) {
+                for (uint32_t a = 0x02000000u; a < 0x02040000u; a += 4) {
+                    uint32_t w = read_memory32(a);
+                    fwrite(&w, 4, 1, f);
+                }
+                for (uint32_t a = 0x03000000u; a < 0x03008000u; a += 4) {
+                    uint32_t w = read_memory32(a);
+                    fwrite(&w, 4, 1, f);
+                }
+                fclose(f);
+                printf("host: memory of frame %ld -> %s\n", dump_at, dump_path);
+            }
+        }
+    }
     if (exit_at >= 0 && frames >= (uint32_t)exit_at) {
         printf("host: exit at frame %lu\n", (unsigned long)frames);
         exit(0);
@@ -605,6 +673,7 @@ void cpumon_sleep(void)
             *host_pcm_tail = tail;
     }
     host_poll_events();
+    host_wav_write(buf, len);
     if (audio_started && !audio_muted && !audio_mute && !host_fast()) {
         host_platform_audio_queue(buf, len);
         while (host_platform_audio_queued_samples() > 2400) {   /* ~50 ms queued */

@@ -132,6 +132,9 @@ $(HOST_BUILD_DIR)/host/%.o: host/%.c
 	$(V)$(ECHO) [ CC HOST ] $<
 	$(V)$(HOST_CC) $(HOST_CFLAGS) -MMD -MP -MF"$(@:%.o=%.d)" -c $< -o $@
 
+# the BIOS image is .incbin'd: a change to it must reassemble the object
+$(HOST_BUILD_DIR)/host/host_gba_bios.o: src/gpsp/bios/open_gba_bios.bin
+
 $(HOST_BUILD_DIR)/host/%.o: host/%.S
 	$(V)mkdir -p $(dir $@)
 	$(V)$(ECHO) [ AS HOST ] $<
