@@ -99,6 +99,7 @@ SECTIONS
       build/gba_idle.o
       build/gba_scale.o
       build/hle_vrally3.o
+      build/hle_spf2.o
     ) *(.text .text*)
 
     /* cpu.o / m4a_gpsp.o run from ITCM. Their *rodata* must stay in RAM
@@ -284,10 +285,13 @@ SECTIONS
   OVERLAY __gba_hle_window : NOCROSSREFS AT (ALIGN(__xip_gba_end__, 4))
   {
     gba_hle_vrally3 { build/hle_vrally3.o (.text .text* .rodata .rodata*) }
+    gba_hle_spf2    { build/hle_spf2.o (.text .text* .rodata .rodata*) }
   }
-  __gba_hle_window_end = __gba_hle_window + SIZEOF(gba_hle_vrally3);
+  /* the window holds the largest */
+  __gba_hle_window_end = __gba_hle_window + MAX(SIZEOF(gba_hle_vrally3), SIZEOF(gba_hle_spf2));
   /* each overlay's size, for gba_hle_table.c (not its end address: see there) */
   __gba_hle_size_vrally3 = SIZEOF(gba_hle_vrally3);
+  __gba_hle_size_spf2 = SIZEOF(gba_hle_spf2);
   /* The window is the ITCM segment's "BSS": the firmware loader reserves a
    * core's ITCM code + BSS (rg_emulators.c, itc_malloc) and hands out the
    * rest of ITCM later (rg_logos.c loads /bios/logo.bin there on first use,
@@ -296,7 +300,7 @@ SECTIONS
   __CORE_ITCM_BSS_END__ = __gba_hle_window_end;
   ASSERT(__CORE_ITCM_BSS_END__ <= __ITCM_CORE_START__ + __ITCM_CORE_LENGTH__ - 1024,
          "Error: the game HLE window leaves the firmware under 1 KB of ITCM (its logos)")
-  ASSERT(__load_stop_gba_hle_vrally3 <= ORIGIN(GBA_CODE) + LENGTH(GBA_CODE),
+  ASSERT(__load_stop_gba_hle_spf2 <= ORIGIN(GBA_CODE) + LENGTH(GBA_CODE),
          "Error: GBA XIP with the game HLE overlays overflows 512K GBA_CODE")
 
   __exidx_start = .;

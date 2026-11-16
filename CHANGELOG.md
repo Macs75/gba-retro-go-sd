@@ -172,7 +172,10 @@ attached to the release:
   to an ITCM window, stored in gba.xip and copied there only when its game
   loads (`src/hle/`). First: V-Rally 3's textured-polygon rasterizer, 40% of
   its race. Device, the race: emulation 7.09M -> 5.3M cycles a frame (90% of
-  the budget), 15 -> 53 frames shown a second.
+  the budget), 15 -> 53 frames shown a second. Second: Super Puzzle Fighter
+  II's sound mixing loops (Capcom's own driver, which the M4A HLE does not
+  see), a third of its match's instructions: device, the match's game code
+  5.1M -> 4.1M cycles a frame, 16 -> 36 frames shown a second.
 - `PROF/` lines: `fps`, dropped pictures (`vskip`), late frames, the audio
   ring's lowest fill, `PROF/idle` (the generic skip), and with `CPI=1`
   `PROF/cpi` (device cycles per GBA instruction; the count itself costs the

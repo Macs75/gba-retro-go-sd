@@ -13,6 +13,7 @@
 #ifndef HOST_BUILD
 #define HLE_OVERLAY(n) extern const uint8_t __load_start_gba_hle_##n[], __gba_hle_size_##n[];
 HLE_OVERLAY(vrally3)
+HLE_OVERLAY(spf2)
 extern uint8_t __gba_hle_window[];
 /* the size is an absolute linker symbol: its "address" is the value */
 #define HLE_BYTES(n) __load_start_gba_hle_##n, (uint32_t)(uintptr_t)__gba_hle_size_##n
@@ -23,6 +24,8 @@ extern uint8_t __gba_hle_window[];
 static const gba_hle_desc gba_hle_games[] = {
     /* V-Rally 3: its polygon rasterizer, 0x03003AB0-0x03003D04 in IWRAM */
     { { 'A', 'V', 'R', 'E' }, 0x03003AB0u, 0x258u, hle_vrally3_run, HLE_BYTES(vrally3) },
+    /* Super Puzzle Fighter II: its sound mixing loops, 0x03000038-0x03000268 */
+    { { 'A', 'Z', '8', 'E' }, 0x03000038u, 0x234u, hle_spf2_run, HLE_BYTES(spf2) },
 };
 
 GBA_COLD void gba_hle_select(const char *game_code)
