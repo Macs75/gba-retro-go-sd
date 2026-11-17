@@ -56,7 +56,12 @@ int main(int argc, char **argv)
     printf("host: F1=save state  F2=load state  (./host_saves/)\n");
     printf("host: ROM %s\n", rom);
 
-    HOST_CORE_ENTRY(0, 0, -1);
+    /* GBA_LOAD_STATE=1: start from slot 0 (host_saves/<rom>.slot0.sav; a
+     * device save state, /data/gba/<rom>-0.sav, copied there loads too) */
+    if (getenv("GBA_LOAD_STATE"))
+        HOST_CORE_ENTRY(1, 0, 0);
+    else
+        HOST_CORE_ENTRY(0, 0, -1);
 
     host_platform_shutdown();
     return 0;

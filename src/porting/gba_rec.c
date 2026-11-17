@@ -29,6 +29,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#ifdef HOST_BUILD
+#include <stdlib.h>   /* getenv: the host switches */
+#endif
 
 #include "gba_rec.h"
 #include "gba_savestate_abi.h"
@@ -178,8 +181,16 @@ int gba_rec_start(int mode, const char *rom_path, uint32_t rom_hash, uint32_t se
                    (unsigned long)h.rom_hash, (unsigned long)rom_hash);
             return rec_fail("wrong game");
         }
-        if (h.setup_hash != setup_hash)
+        if (h.setup_hash != setup_hash) {
+#ifdef HOST_BUILD
+            /* GBA_REC_ANY_SETUP=1: replay anyway (a BIOS change's regression
+             * run: a game that does not use what changed replays exactly) */
+            if (getenv("GBA_REC_ANY_SETUP"))
+                printf("REC: recorded with another BIOS or other cheats: replaying anyway\n");
+            else
+#endif
             return rec_fail("recorded with another BIOS or other cheats");
+        }
         if (gba_backup_import(rec_f, GBA_BACKUP_IMAGE_BYTES) != GBA_BACKUP_IMAGE_BYTES)
             return rec_fail("truncated");
         backup_replaced = 1;
