@@ -1780,7 +1780,7 @@ static const ini_t gbaover[] = {
    {
       // WarioWare: Twisted (U)
       "RZWE",                      /* gamepak_code         */
-      FLAGS_RUMBLE,                /* flags                */
+      FLAGS_RUMBLE | FLAGS_GYRO,   /* flags                */
       0,                           /* idle_loop_target_pc  */
       0,                           /* translation_gate_target_1 */
       0,                           /* translation_gate_target_2 */
@@ -1789,7 +1789,7 @@ static const ini_t gbaover[] = {
    {
       // WarioWare: Twisted (E)
       "RZWP",                      /* gamepak_code         */
-      FLAGS_RUMBLE,                /* flags                */
+      FLAGS_RUMBLE | FLAGS_GYRO,   /* flags                */
       0,                           /* idle_loop_target_pc  */
       0,                           /* translation_gate_target_1 */
       0,                           /* translation_gate_target_2 */
@@ -1798,7 +1798,7 @@ static const ini_t gbaover[] = {
    {
       // Mawaru Made in Wario (J)
       "RZWJ",                      /* gamepak_code         */
-      FLAGS_RUMBLE,                /* flags                */
+      FLAGS_RUMBLE | FLAGS_GYRO,   /* flags                */
       0,                           /* idle_loop_target_pc  */
       0,                           /* translation_gate_target_1 */
       0,                           /* translation_gate_target_2 */

@@ -1303,6 +1303,13 @@ typedef enum
 #define RTC_WRITE_STATUS              2
 
 static bool rtc_enabled = false, rumble_enabled = false;
+#ifndef HOST_BUILD
+#define GYRO_TAIL __attribute__((section(".gba_tail_bss")))   /* no .bss shift */
+#else
+#define GYRO_TAIL
+#endif
+static bool gyro_enabled GYRO_TAIL;   /* load_gamepak sets it, init_memory the rest */
+static void (*gpio_hook)(u8 oldv) GYRO_TAIL;   /* write_gpio's devices: gpio_rumble* */
 
 /* Did the cart end up with a working clock?
  *
@@ -1371,6 +1378,78 @@ static time_t rtc_current_time(void)
 }
 
 
+/* The rotation sensor of WarioWare: Twisted! (a gyroscope behind the cart's
+ * GPIO, mGBA's model): pin 0 high samples it, each falling edge of pin 1
+ * shifts the 16-bit sample out on pin 2, MSB first. At rest it reads 0x6C0;
+ * turning adds or subtracts (gyro_offset), ramping while it is held.
+ * It is driven from the keys (gba_tilt_keys): GBA Select -- the TIME button,
+ * which these games do not use -- toggles tilt mode, and in it Left and Right
+ * turn the sensor instead of reaching the game. Derived from the key word
+ * alone, so a recording replays it; reset with the machine (init_memory). */
+static u16 gyro_sample GYRO_TAIL;
+static bool gyro_edge GYRO_TAIL;
+static s32 gyro_offset GYRO_TAIL, gyro_hold GYRO_TAIL;
+static bool tilt_select_prev GYRO_TAIL;
+bool gba_tilt_on GYRO_TAIL;   /* tilt mode: also read by the renderer (its badge) */
+
+GBA_COLD bool gba_gyro_is_enabled(void)
+{
+  return gyro_enabled;
+}
+
+#define GYRO_RATE_START  0x100   /* the offset on the first frame held */
+#define GYRO_RATE_STEP   0x14    /* added per frame held */
+#define GYRO_RATE_MAX    0x380
+
+/* dir: bit 0 one way, bit 1 the other (both or none: at rest) */
+static void gba_gyro_input(u32 dir)
+{
+  dir &= 3;
+  if (dir == 0 || dir == 3) {
+    gyro_hold = 0;
+    gyro_offset = 0;
+    return;
+  }
+  s32 rate = GYRO_RATE_START + gyro_hold * GYRO_RATE_STEP;
+  if (rate > GYRO_RATE_MAX)
+    rate = GYRO_RATE_MAX;
+  else
+    gyro_hold++;
+  gyro_offset = (dir == 1) ? -rate : rate;
+}
+
+/* gba_set_keys' word on a gyro cart: the keys the game sees */
+GBA_COLD u32 gba_tilt_keys(u32 keys)
+{
+  bool sel = (keys & 0x004) != 0;
+  u32 dir = 0;
+  if (sel && !tilt_select_prev)
+    gba_tilt_on = !gba_tilt_on;
+  tilt_select_prev = sel;
+  keys &= ~0x004u;
+  if (gba_tilt_on) {
+    dir = ((keys >> 5) & 1) | (((keys >> 4) & 1) << 1);   /* Left, Right */
+    keys &= ~0x030u;
+  }
+  gba_gyro_input(dir);
+  return keys;
+}
+
+static GBA_COLD __attribute__((noinline)) void gyro_read_pins(void)
+{
+  u8 pins = gpio_regs[0];
+  if (pins & 1)
+    gyro_sample = (u16)(0x6C0 + gyro_offset);
+  if (gyro_edge && !(pins & 2)) {
+    u32 bit = gyro_sample >> 15;
+    gyro_sample <<= 1;
+    /* driven by the sensor only where the port is an input (direction 0) */
+    if (!(gpio_regs[1] & 0x4))
+      gpio_regs[0] = (gpio_regs[0] & ~0x4) | (bit << 2);
+  }
+  gyro_edge = (pins & 2) != 0;
+}
+
 // Rumble trackin vars, not really preserved (it's just aproximate)
 static u32 rumble_enable_tick, rumble_ticks;
 
@@ -1387,7 +1466,7 @@ static u8 encode_bcd(u8 value)
 }
 
 void update_gpio_romregs() {
-  if (rtc_enabled || rumble_enabled) {
+  if (rtc_enabled || rumble_enabled) {   /* a gyro cart has rumble too */
     // Update the registers in the ROM mapped buffer.
     u8 *map = memory_map_read[0x8000000 >> 15];
     if (map) {
@@ -1519,6 +1598,23 @@ void write_rumble(bool oldv, bool newv) {
   }
 }
 
+/* write_gpio's cart devices on its pins (gpio_hook, set by load_gamepak):
+ * the rumble motor's pin 3, and a gyro cart's sensor on pins 0-2. In the
+ * flash, through a pointer: a direct call from RAM would need a veneer, and
+ * the linker puts those in front of the rotated/scaled renderers. */
+static GBA_COLD void gpio_rumble(u8 oldv)
+{
+  u8 newv = gpio_regs[0];
+  if ((oldv ^ newv) & 0x8)
+    write_rumble(oldv & 0x8, newv & 0x8);
+}
+
+static GBA_COLD void gpio_rumble_gyro(u8 oldv)
+{
+  gpio_rumble(oldv);
+  gyro_read_pins();
+}
+
 void rumble_frame_reset() {
   // Reset the tick initial value to frame start (only if active)
   rumble_ticks = 0;
@@ -1555,12 +1651,25 @@ void function_cc write_gpio(u32 address, u32 value) {
   if (rtc_enabled && (prev_value & 0x7) != (gpio_regs[0] & 0x7))
     write_rtc(prev_value & 0x7, gpio_regs[0] & 0x7);
 
-  if (rumble_enabled && (prev_value & 0x8) != (gpio_regs[0] & 0x8))
-    write_rumble(prev_value & 0x8, gpio_regs[0] & 0x8);
+  if (gpio_hook)   /* rumble, a gyro sensor */
+    gpio_hook(prev_value);
 
   // Reflect the values
   update_gpio_romregs();
 }
+
+#ifndef HOST_BUILD
+/* ld/layout: write_gpio's section keeps its former 0x4b8 bytes, so the RAM
+ * code behind it (the memory handlers: read_memory*, write_memory*,
+ * dma_transfer, write_io_register16) stays at its measured place. The
+ * rumble/gyro work moved out of it (gpio_hook) and it shrank to 0x454: the
+ * difference is appended to the section here, whatever order GCC emits
+ * things in. If write_gpio changes size, change this: write_gpio's symbol
+ * size (arm-none-eabi-nm -S) + this = 0x4b8. */
+__asm__(".pushsection .text.write_gpio,\"ax\",%progbits\n\t"
+        ".space 0x64\n\t"
+        ".popsection");
+#endif
 
 #define write_gpio8()                                                         \
 
@@ -1721,6 +1830,7 @@ typedef struct
 #define FLAGS_RUMBLE         0x0200   // Enables GPIO3 rumble support.
 #define FLAGS_RTC            0x0400   // Enables RTC support by default.
 #define FLAGS_EEPROM         0x0800   // Forces EEPROM storage.
+#define FLAGS_GYRO           0x1000   // A rotation sensor on GPIO0-2 (WarioWare: Twisted!).
 
 #define FLAGS_SERIAL         0x8000   // Configure a serial mode by default.
 #define FLAGS_SERIAL_MASK    0x00FF
@@ -1759,6 +1869,9 @@ static void load_game_config_over(const char *gamecode)
 
      if (gbaover[i].flags & FLAGS_RUMBLE)
        rumble_enabled = true;
+
+     if (gbaover[i].flags & FLAGS_GYRO)
+       gyro_enabled = true;
 
      if (gbaover[i].flags & FLAGS_EEPROM)
        backup_type_reset = BACKUP_EEPROM;
@@ -2429,6 +2542,12 @@ bool gamepak_must_swap(void)
 GBA_COLD void init_memory(void)
 {
   u32 map_offset = 0, i;
+
+  /* the rotation sensor and tilt mode start at rest (a replay's power-on) */
+  gyro_sample = 0;
+  gyro_edge = false;
+  gyro_offset = gyro_hold = 0;
+  gba_tilt_on = tilt_select_prev = false;
 
   for (i = 0; i < DMA_CHAN_CNT; i++)
   {
@@ -3125,6 +3244,11 @@ GBA_COLD u32 load_gamepak(const struct retro_game_info* info, const char *name,
    flash_bank_cnt = FLASH_SIZE_64KB;
    rtc_enabled = false;
    rumble_enabled = false;
+   gyro_enabled = false;
+   gpio_hook = NULL;
+   gyro_sample = 0;
+   gyro_edge = false;
+   gyro_offset = gyro_hold = 0;
    backup_type_reset = BACKUP_UNKN;
    serial_mode = force_serial;
 
@@ -3208,6 +3332,12 @@ GBA_COLD u32 load_gamepak(const struct retro_game_info* info, const char *name,
       rtc_enabled = (force_rtc == FEAT_ENABLE);
    if (force_rumble != FEAT_AUTODETECT)
       rumble_enabled = (force_rumble == FEAT_ENABLE);
+   /* A gyro cart needs its GPIO port visible (update_gpio_romregs tests the
+    * clock and rumble flags): it keeps rumble on even where the front-end has
+    * no motor -- the motor's on-time bookkeeping is all that costs. */
+   if (gyro_enabled)
+      rumble_enabled = true;
+   gpio_hook = gyro_enabled ? gpio_rumble_gyro : rumble_enabled ? gpio_rumble : NULL;
 
    /* Capture the RTC baseline once per content load (and only here -
     * not in init_memory/reset_gba, so a retro_reset does not change the

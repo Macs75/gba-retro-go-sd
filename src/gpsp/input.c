@@ -216,6 +216,10 @@ unsigned input_write_savestate(u8 *dst)
  * VBlankIntrWait with keypad IRQs armed is waiting for exactly that. */
 void gba_set_keys(u32 keys)
 {
+   /* a cart with a rotation sensor: TIME (Select) toggles tilt mode, the
+    * D-pad's Left/Right turn it there (gba_memory.c) */
+   if (gba_gyro_is_enabled())
+      keys = gba_tilt_keys(keys);
    keys &= 0x3FF;
    if ((keys | old_key) != old_key)
       trigger_key(keys);

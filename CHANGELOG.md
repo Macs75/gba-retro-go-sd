@@ -27,6 +27,10 @@ attached to the release:
 
 ### Added
 
+- **Tilt controls for WarioWare: Twisted!** (gyro sensor on the cart's
+  GPIO): the Time button toggles tilt mode; in it, D-pad left/right turn
+  (ramping up while held). A small TILT badge in the bottom-left corner
+  shows when tilt mode is on.
 - **Record and replay input** from the pause menu ("Record input" /
   "Replay input"): the game restarts from power-on and the keys of every
   frame are saved next to the ROM (`<game>.rec`, with the cart save as it

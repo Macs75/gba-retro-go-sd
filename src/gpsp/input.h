@@ -80,6 +80,12 @@ u32 update_input(void);
  * A B Sel Start Right Left Up Down R L. */
 void gba_set_keys(u32 keys);
 
+/* A cart with a rotation sensor (WarioWare: Twisted!): gba_set_keys turns
+ * the keys into the game's and the sensor's input (gba_memory.c). */
+bool gba_gyro_is_enabled(void);
+extern bool gba_tilt_on;   /* tilt mode */
+u32 gba_tilt_keys(u32 keys);
+
 bool input_check_savestate(const u8 *src);
 unsigned input_write_savestate(u8* dst);
 bool input_read_savestate(const u8 *src);

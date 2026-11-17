@@ -2802,6 +2802,26 @@ static void screen_hash_line(const u16 *p, u32 vcount)
 }
 #endif
 
+
+/* Tilt mode's badge (a cart with a rotation sensor, gba_memory.c): "TILT",
+ * white on black, 3x5 glyphs, in the picture's bottom-left corner -- the
+ * scaler enlarges it with the picture. In the flash: once a frame, and only
+ * while tilt mode is on. */
+extern "C" bool gba_tilt_on;
+static GBA_COLD __attribute__((noinline)) void tilt_badge(u16 *screen, u32 pitch)
+{
+  static const u8 glyph[3][5] = { { 7, 2, 2, 2, 2 }, { 7, 2, 2, 2, 7 }, { 4, 4, 4, 4, 7 } };
+  static const u8 text[4] = { 0, 1, 2, 0 };
+  const u32 x0 = 1, y0 = 160 - 8, w = 18, h = 7;
+  for (u32 y = 0; y < h; y++)
+    for (u32 x = 0; x < w; x++)
+      screen[(y0 + y) * pitch + x0 + x] = 0x0000;
+  for (u32 c = 0; c < 4; c++)
+    for (u32 r = 0; r < 5; r++)
+      for (u32 b = 0; b < 3; b++)
+        if (glyph[text[c]][r] & (4 >> b))
+          screen[(y0 + 1 + r) * pitch + x0 + 1 + c * 4 + b] = 0xFFFF;
+}
 void update_scanline(void)
 {
   u32 pitch = get_screen_pitch();
@@ -2904,6 +2924,9 @@ void update_scanline(void)
       affine_reference_y[1] += (s16)read_ioreg(REG_BG3PD);
     }
   }
+  /* a gyro cart's tilt mode: its badge over the finished picture */
+  if (__builtin_expect(gba_tilt_on, 0) && vcount == 159)
+    tilt_badge(get_screen_pixels(), pitch);
   GBA_PROF_STOP(GBA_PART_PPU);
 }
 
