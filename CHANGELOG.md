@@ -27,6 +27,18 @@ attached to the release:
 
 ### Added
 
+- **WarioWare: Twisted! runs at full speed in its intro, menus and level
+  intros** (it dropped to 14-30 fps):
+  - its VBlank wait loop (which steps a random-number generator every pass)
+    is skipped, exactly: the RNG, the stack word and the store count advance
+    as the skipped passes would. Once a pass's cost is measured, the skip
+    happens on the first arrival after each event.
+  - its sound mixer (three IWRAM loops: resampling, summing, output) and
+    its unrolled 32-bit division run natively from the ITCM window
+    (`src/hle/hle_rzw.cc`, loaded only for this game, 4,980 bytes), with the
+    interpreter's exact cycles and stopping points.
+  Host, interpreted instructions a frame: story select 87.9K -> 49.7K,
+  first level's intro 69.2K -> 46.6K; both recordings replay exactly.
 - **Tilt controls for WarioWare: Twisted!** (gyro sensor on the cart's
   GPIO): the Time button toggles tilt mode; in it, D-pad left/right turn
   (ramping up while held). A small TILT badge in the bottom-left corner

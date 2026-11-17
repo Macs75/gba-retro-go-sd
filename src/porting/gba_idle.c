@@ -77,6 +77,17 @@ static uint32_t black[NBLACK], black_n, black_hits;
 static uint32_t black_head[NHEADS], black_head_n;
 /* the probe: the machine at the head after the first arrival */
 static int probe_ok;
+
+/* A game's own wait loop that the generic skip cannot take (it stores on
+ * every pass) but that is still the same pass between two events, apart
+ * from what it stores: a function for its head (game_head_fn, set by
+ * gba_idle_reset for that game; the generic search is off then). In the
+ * flash, as the rest of this file's cold code; its state at the end of
+ * .bss (nothing moves). */
+#define IDLE_GAME_TAIL __attribute__((section(".gba_tail_bss")))
+typedef int32_t (*idle_game_fn_t)(int32_t cycles, uint32_t flags);
+static idle_game_fn_t game_head_fn IDLE_GAME_TAIL;
+static int idle_on IDLE_GAME_TAIL;   /* gba_idle_enable ran: the skip is on */
 static uint32_t probe_seq, probe_fx, probe_reg[15], probe_mode, probe_flags, fails;
 static int32_t probe_cycles;
 
@@ -88,6 +99,8 @@ static void disarm(void)
     probe_ok = 0;
 }
 
+static void idle_game_setup(void);
+
 void gba_idle_reset(void)
 {
     disarm();
@@ -96,6 +109,7 @@ void gba_idle_reset(void)
     memset(black, 0xff, sizeof black);
     memset(black_head, 0xff, sizeof black_head);
     seq++;
+    idle_game_setup();
 }
 
 void gba_idle_enable(void)
@@ -111,6 +125,7 @@ void gba_idle_enable(void)
     log_on = getenv("GBA_IDLE_LOG") != NULL;
 #endif
     enabled = 1;
+    idle_on = 1;
     idle_loop_cond = IDLE_COND_GENERIC;
     gba_idle_reset();
     printf("gba: generic poll-loop skip on\n");
@@ -400,6 +415,8 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
 GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint32_t c, uint32_t v)
 {
     uint32_t flags = n | z << 1 | c << 2 | v << 3, mode = reg[16] & 0xFFu;
+    if (__builtin_expect(game_head_fn != 0, 0))
+        return game_head_fn(cycles, flags);
 #ifdef HOST_BUILD
     gba_idle_heads++;
 #endif
@@ -436,4 +453,129 @@ GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, 
     probe_cycles = cycles;
     memcpy(probe_reg, reg, sizeof probe_reg);
     return cycles;
+}
+
+/* ---- WarioWare: Twisted! (USA): its VBlank wait ----------------------------
+ * 0x080012F8: until the VBlank handler sets the halfword at 0x03000008, each
+ * pass steps the game's random number (0x08001424: x = x * 109 + 0x3FD, 16
+ * bits at 0x03000010), reads the ROM word at 0x08000000 + 4 * x and stores
+ * it on the stack. ~60% of its instructions on the title (host PC
+ * histogram, 2026-11-17); the generic skip rejects it (stores). Between two
+ * events every pass is the same pass but for those two stores, so k passes
+ * are: the number stepped k times, the last pass's ROM word on the stack,
+ * k times the pass's cycles (measured between two arrivals, as the generic
+ * probe does). Verified by the replay's REC/hash lines. */
+#define RZW_HEAD 0x0800130Cu
+#define RZW_RNG  0x03000010u
+#define RZW_FNV  0x7c26f928u   /* 0x080012F8-0x08001338 + 0x08001424-0x08001440 */
+
+extern unsigned int read_memory32(unsigned int address);
+extern unsigned short read_memory16(unsigned int address);
+
+extern uint16_t io_registers[];
+#define RZW_FLAG 0x03000008u   /* the VBlank handler's flag the loop waits on */
+#define RZW_WAITCNT 0x102      /* REG_WAITCNT, io_registers' index */
+
+static int32_t rzw_cycles IDLE_GAME_TAIL;
+static uint32_t rzw_seq IDLE_GAME_TAIL, rzw_fx IDLE_GAME_TAIL, rzw_flags IDLE_GAME_TAIL,
+                rzw_mode IDLE_GAME_TAIL, rzw_x IDLE_GAME_TAIL, rzw_reg[15] IDLE_GAME_TAIL;
+static int rzw_ok IDLE_GAME_TAIL;
+/* a pass's cycles once proven (the probe below), with the wait states and
+ * mode it was measured at: from then on any arrival skips at once */
+static int32_t rzw_pass IDLE_GAME_TAIL;
+static uint32_t rzw_pass_waitcnt IDLE_GAME_TAIL, rzw_pass_mode IDLE_GAME_TAIL;
+
+static uint32_t rzw_lcg(uint32_t x) { return (x * 109u + 0x3FDu) & 0xFFFFu; }
+
+static uint32_t rzw_code_hash(void)
+{
+    uint32_t h = 2166136261u;
+    for (uint32_t a = 0x080012F8u; a < 0x08001338u; a += 2)
+        h = (h ^ read_memory16(a)) * 16777619u;
+    for (uint32_t a = 0x08001424u; a < 0x08001440u; a += 2)
+        h = (h ^ read_memory16(a)) * 16777619u;
+    return h;
+}
+
+/* k whole passes from the head: what they leave (a pass overwrites r0-r2,
+ * lr and the flags with the same values every time: the arrival's own flags
+ * already are those -- the loop's beq follows its cmp) */
+static int32_t rzw_skip(uint8_t *iw, uint32_t x, uint32_t sp, int32_t cycles, int32_t pass)
+{
+    int32_t k = (cycles - 1) / pass;
+    if (k <= 0)
+        return cycles;
+    for (int32_t i = 0; i < k; i++)
+        x = rzw_lcg(x);
+    *(uint16_t *)(iw + (RZW_RNG & 0x7FFF)) = (uint16_t)x;
+    *(uint32_t *)(iw + (sp & 0x7FFC)) = read_memory32(0x08000000u + (x << 2));
+    reg[0] = 0;                 /* the flag (ldrh) */
+    reg[1] = 0x08000000u;       /* movs r1, #128; lsls r1, #20 */
+    reg[2] = 0x3FDu;            /* the generator's literal */
+    reg[14] = 0x08001311u;      /* bl's return */
+    gba_idle_sidefx += 2u * (uint32_t)k;
+    gba_idle_skipped += (uint32_t)(k * pass);
+    gba_idle_skips++;
+    return cycles - (k * pass - (bug ? 1 : 0));
+}
+
+static int32_t rzw_wait(int32_t cycles, uint32_t flags)
+{
+    uint8_t *iw = memory_map_read[0x03000000u >> 15];
+    uint32_t x = *(uint16_t *)(iw + (RZW_RNG & 0x7FFF)), sp = reg[13];
+    uint32_t mode = reg[16] & 0xFFu;
+    /* proven: skip at the first arrival after an event, if the next pass is
+     * a pass (the flag still 0: an event between its check and the branch
+     * back can have set it) */
+    if (rzw_pass > 0 && rzw_pass_waitcnt == io_registers[RZW_WAITCNT] && rzw_pass_mode == mode &&
+        (sp >> 24) == 3 && *(uint16_t *)(iw + (RZW_FLAG & 0x7FFF)) == 0) {
+        rzw_ok = 0;
+        return rzw_skip(iw, x, sp, cycles, rzw_pass);
+    }
+    if (rzw_ok && rzw_seq == seq && cycles < rzw_cycles && flags == rzw_flags &&
+        mode == rzw_mode && gba_idle_sidefx == rzw_fx + 2 && x == rzw_lcg(rzw_x) &&
+        (sp >> 24) == 3 && !memcmp(reg, rzw_reg, sizeof rzw_reg) &&
+        *(uint32_t *)(iw + (sp & 0x7FFC)) == read_memory32(0x08000000u + (x << 2))) {
+        int32_t pass = rzw_cycles - cycles;
+        rzw_pass = pass;                       /* proven: the next arrivals skip at once */
+        rzw_pass_waitcnt = io_registers[RZW_WAITCNT];
+        rzw_pass_mode = mode;
+        rzw_ok = 0;
+        return rzw_skip(iw, x, sp, cycles, pass);
+    }
+    rzw_ok = 1;
+    rzw_seq = seq;
+    rzw_cycles = cycles;
+    rzw_flags = flags;
+    rzw_mode = mode;
+    rzw_fx = gba_idle_sidefx;
+    rzw_x = x;
+    memcpy(rzw_reg, reg, sizeof rzw_reg);
+    return cycles;
+}
+
+/* at every reset: a game with its own wait loop gets its head armed for good */
+static void idle_game_setup(void)
+{
+    game_head_fn = 0;
+    rzw_ok = 0;
+    rzw_pass = 0;
+    if (!idle_on)
+        return;
+    enabled = 1;
+    if (read_memory32(0x080000ACu) == 0x45575A52u) {   /* "RZWE" */
+        uint32_t h = rzw_code_hash();
+#ifdef HOST_BUILD
+        if (getenv("GBA_IDLE_LOG"))
+            printf("IDLE: WarioWare wait loop code hash %08lx\n", (unsigned long)h);
+#endif
+        if (h == RZW_FNV) {
+            enabled = 0;                  /* no generic arming over it */
+            game_head_fn = rzw_wait;
+            head = RZW_HEAD;
+            head_thumb = 1;
+            gba_idle_head_pc = RZW_HEAD;
+            idle_loop_target_pc = RZW_HEAD;
+        }
+    }
 }
