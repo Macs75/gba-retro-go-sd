@@ -259,6 +259,10 @@ attached to the release:
 
 ### Fixed
 
+- **WarioWare: Twisted! locked up in Jimmy's third stage**: IME (the
+  interrupt master enable) is one bit on the hardware, but any non-zero
+  value enabled interrupts here. The game turns them off with 0xF200 (bit 0
+  clear) and kept taking them, into a reset loop.
 - **Sampled music played random notes in games that ask the BIOS for a
   note's playback rate** (WarioWare: Twisted!): the bundled open BIOS had
   nine addresses linked for the cartridge (0x0800xxxx) instead of itself, so

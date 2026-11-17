@@ -773,7 +773,7 @@ static __attribute__((noinline)) u32 arm_reg_offset(u32 opcode, u32 c_flag)
 
 #define check_for_interrupts()                                                \
   if((read_ioreg(REG_IE) & read_ioreg(REG_IF)) &&                             \
-   read_ioreg(REG_IME) && ((reg[REG_CPSR] & 0x80) == 0))                      \
+   (read_ioreg(REG_IME) & 1) && ((reg[REG_CPSR] & 0x80) == 0))                \
   {                                                                           \
     REG_MODE(MODE_IRQ)[6] = reg[REG_PC] + 4;                                  \
     REG_SPSR(MODE_IRQ) = reg[REG_CPSR];                                       \
@@ -1798,8 +1798,12 @@ void set_cpu_mode(cpu_mode_type new_mode)
   reg[CPU_MODE] = new_mode;
 }
 
+/* IME is one bit (bit 0): a write with bit 0 clear turns interrupts off
+ * whatever else it carries (WarioWare: Twisted! wrote 0xF200 and kept taking
+ * them, into a reset loop). Tested here, not masked at the write: the same
+ * instruction count where it runs. */
 #define cpu_has_interrupt()                                 \
-  (!(reg[REG_CPSR] & 0x80) && read_ioreg(REG_IME) &&        \
+  (!(reg[REG_CPSR] & 0x80) && (read_ioreg(REG_IME) & 1) &&  \
     (read_ioreg(REG_IE) & read_ioreg(REG_IF)))
 
 // Returns whether the CPU has a pending interrupt.
