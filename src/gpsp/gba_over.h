@@ -1805,6 +1805,33 @@ static const ini_t gbaover[] = {
       0,                           /* translation_gate_target_3 */
    },
    {
+      // Yoshi Topsy-Turvy (U): the accelerometer (FLAGS_TILT), EEPROM save
+      "KYGE",                      /* gamepak_code         */
+      FLAGS_TILT | FLAGS_EEPROM,   /* flags                */
+      0,                           /* idle_loop_target_pc  */
+      0,                           /* translation_gate_target_1 */
+      0,                           /* translation_gate_target_2 */
+      0,                           /* translation_gate_target_3 */
+   },
+   {
+      // Yoshi's Universal Gravitation (E): the accelerometer (FLAGS_TILT), EEPROM save
+      "KYGP",                      /* gamepak_code         */
+      FLAGS_TILT | FLAGS_EEPROM,   /* flags                */
+      0,                           /* idle_loop_target_pc  */
+      0,                           /* translation_gate_target_1 */
+      0,                           /* translation_gate_target_2 */
+      0,                           /* translation_gate_target_3 */
+   },
+   {
+      // Yoshi no Banyuuinryoku (J): the accelerometer (FLAGS_TILT), EEPROM save
+      "KYGJ",                      /* gamepak_code         */
+      FLAGS_TILT | FLAGS_EEPROM,   /* flags                */
+      0,                           /* idle_loop_target_pc  */
+      0,                           /* translation_gate_target_1 */
+      0,                           /* translation_gate_target_2 */
+      0,                           /* translation_gate_target_3 */
+   },
+   {
       // Yu-Gi-Oh! - Dungeon Dice Monsters (U)
       "AYDE",                      /* gamepak_code         */
       0,                           /* flags                */

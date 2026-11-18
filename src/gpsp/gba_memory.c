@@ -491,13 +491,26 @@ void reload_timing_info()
 
 extern u32 gba_idle_sidefx;   /* src/porting/gba_idle.c */
 
+/* An accelerometer in the SRAM range of an EEPROM cart (Yoshi's Universal
+ * Gravitation): tilt_read / tilt_write, below with the gyro, through
+ * pointers load_gamepak sets (a direct call from this RAM code into the
+ * flash would add linker veneers in front of the renderers) */
+#ifndef HOST_BUILD
+#define TILT_TAIL __attribute__((section(".gba_tail_bss")))
+#else
+#define TILT_TAIL
+#endif
+static bool tilt_enabled TILT_TAIL;
+static u8 (*tilt_read_hook)(u32 address) TILT_TAIL;
+static void (*tilt_write_hook)(u32 address, u32 value) TILT_TAIL;
+
 u8 read_backup(u32 address)
 {
   u8 value = 0;
   gba_idle_sidefx++;     /* flash command state (gba_idle.c) */
 
   if(backup_type == BACKUP_EEPROM)
-    return 0xff;
+    return tilt_read_hook ? tilt_read_hook(address) : 0xff;
 
   if(backup_type == BACKUP_UNKN)
     backup_type = BACKUP_SRAM;
@@ -1137,8 +1150,11 @@ void function_cc write_backup(u32 address, u32 value)
 {
   value &= 0xFF;
 
-  if(backup_type == BACKUP_EEPROM)
+  if(backup_type == BACKUP_EEPROM) {
+    if (tilt_write_hook)
+      tilt_write_hook(address, value);
     return;
+  }
 
   if(backup_type == BACKUP_UNKN)
     backup_type = BACKUP_SRAM;
@@ -1392,9 +1408,50 @@ static s32 gyro_offset GYRO_TAIL, gyro_hold GYRO_TAIL;
 static bool tilt_select_prev GYRO_TAIL;
 bool gba_tilt_on GYRO_TAIL;   /* tilt mode: also read by the renderer (its badge) */
 
+/* The accelerometer of Yoshi's Universal Gravitation (GBATEK "GBA Cart Tilt
+ * Sensor", mGBA's model): 0x55 to 0x0E008000 then 0xAA to 0x0E008100 take a
+ * sample; X is 12 bits at 0x0E008200 (low) / 0x0E008300 (high nibble, bit 7
+ * ready), Y at 0x0E008400 / 0x0E008500. At rest X 0x392, Y 0x3A0 (a real
+ * cart's centre); a tilt moves X by TILT_X_FULL, about a real cart's full
+ * range. The game reads X as three states (level, left, right) against
+ * thresholds it calibrates, so a held key is a full tilt: in tilt mode L
+ * tilts left and R right, instead of reaching the game (they only flip the
+ * Eggling Book's pages). Y stays at rest (the game only calibrates with it). */
+#define TILT_X_REST  0x392
+#define TILT_Y_REST  0x3A0
+#define TILT_X_FULL  0xE0
+static u16 tilt_x GYRO_TAIL, tilt_y GYRO_TAIL;
+static s16 tilt_offset GYRO_TAIL;
+static bool tilt_armed GYRO_TAIL;   /* 0x55 written, waiting for the 0xAA */
+
+static GBA_COLD __attribute__((noinline)) u8 tilt_read(u32 address)
+{
+  switch (address) {
+  case 0x8200: return tilt_x & 0xFF;
+  case 0x8300: return ((tilt_x >> 8) & 0xF) | 0x80;   /* always ready */
+  case 0x8400: return tilt_y & 0xFF;
+  case 0x8500: return (tilt_y >> 8) & 0xF;
+  default:     return 0xFF;                            /* as with no sensor */
+  }
+}
+
+static GBA_COLD __attribute__((noinline)) void tilt_write(u32 address, u32 value)
+{
+  if (address == 0x8000)
+    tilt_armed = value == 0x55;
+  else if (address == 0x8100) {
+    if (value == 0xAA && tilt_armed) {
+      tilt_x = (u16)(TILT_X_REST + tilt_offset);
+      tilt_y = TILT_Y_REST;
+    }
+    tilt_armed = false;
+  }
+}
+
+/* a motion sensor the keys drive: the gyro or the accelerometer */
 GBA_COLD bool gba_gyro_is_enabled(void)
 {
-  return gyro_enabled;
+  return gyro_enabled || tilt_enabled;
 }
 
 #define GYRO_RATE_START  0x100   /* the offset on the first frame held */
@@ -1418,7 +1475,7 @@ static void gba_gyro_input(u32 dir)
   gyro_offset = (dir == 1) ? -rate : rate;
 }
 
-/* gba_set_keys' word on a gyro cart: the keys the game sees */
+/* gba_set_keys' word on a motion-sensor cart: the keys the game sees */
 GBA_COLD u32 gba_tilt_keys(u32 keys)
 {
   bool sel = (keys & 0x004) != 0;
@@ -1427,6 +1484,15 @@ GBA_COLD u32 gba_tilt_keys(u32 keys)
     gba_tilt_on = !gba_tilt_on;
   tilt_select_prev = sel;
   keys &= ~0x004u;
+  if (tilt_enabled) {
+    /* the accelerometer: L / R (Yoshi walks with the D-pad meanwhile) */
+    if (gba_tilt_on) {
+      dir = ((keys >> 9) & 1) | (((keys >> 8) & 1) << 1);   /* L, R */
+      keys &= ~0x300u;
+    }
+    tilt_offset = dir == 1 ? -TILT_X_FULL : dir == 2 ? TILT_X_FULL : 0;
+    return keys;
+  }
   if (gba_tilt_on) {
     dir = ((keys >> 5) & 1) | (((keys >> 4) & 1) << 1);   /* Left, Right */
     keys &= ~0x030u;
@@ -1659,15 +1725,22 @@ void function_cc write_gpio(u32 address, u32 value) {
 }
 
 #ifndef HOST_BUILD
-/* ld/layout: write_gpio's section keeps its former 0x4b8 bytes, so the RAM
- * code behind it (the memory handlers: read_memory*, write_memory*,
- * dma_transfer, write_io_register16) stays at its measured place. The
- * rumble/gyro work moved out of it (gpio_hook) and it shrank to 0x454: the
- * difference is appended to the section here, whatever order GCC emits
- * things in. If write_gpio changes size, change this: write_gpio's symbol
- * size (arm-none-eabi-nm -S) + this = 0x4b8. */
+/* ld/layout: padding in write_gpio's and write_backup's sections (in
+ * front of each function; these sections, opened here first, also put
+ * write_backup right behind write_gpio), so the RAM code behind them (the
+ * memory handlers: read_memory*, write_memory*,
+ * dma_transfer, write_io_register16) stays at its measured place: what
+ * write_gpio lost when gpio_hook took the rumble/gyro work out, less what
+ * read_backup and write_backup gained for the accelerometer (0x0c + 0x18).
+ * Two pads, not one: write_gpio is 4 bytes longer when it starts 8-aligned
+ * (its literal pool), so its pad alone lands 4 bytes either side. If any of
+ * the three functions changes size, change these so that read_memory8
+ * keeps its address. */
 __asm__(".pushsection .text.write_gpio,\"ax\",%progbits\n\t"
-        ".space 0x64\n\t"
+        ".space 0x3c\n\t"
+        ".popsection\n\t"
+        ".pushsection .text.write_backup,\"ax\",%progbits\n\t"
+        ".space 0x4\n\t"
         ".popsection");
 #endif
 
@@ -1831,6 +1904,7 @@ typedef struct
 #define FLAGS_RTC            0x0400   // Enables RTC support by default.
 #define FLAGS_EEPROM         0x0800   // Forces EEPROM storage.
 #define FLAGS_GYRO           0x1000   // A rotation sensor on GPIO0-2 (WarioWare: Twisted!).
+#define FLAGS_TILT           0x2000   // An accelerometer at 0x0E008000 (Yoshi's Universal Gravitation).
 
 #define FLAGS_SERIAL         0x8000   // Configure a serial mode by default.
 #define FLAGS_SERIAL_MASK    0x00FF
@@ -1872,6 +1946,9 @@ static void load_game_config_over(const char *gamecode)
 
      if (gbaover[i].flags & FLAGS_GYRO)
        gyro_enabled = true;
+
+     if (gbaover[i].flags & FLAGS_TILT)
+       tilt_enabled = true;
 
      if (gbaover[i].flags & FLAGS_EEPROM)
        backup_type_reset = BACKUP_EEPROM;
@@ -2548,6 +2625,10 @@ GBA_COLD void init_memory(void)
   gyro_edge = false;
   gyro_offset = gyro_hold = 0;
   gba_tilt_on = tilt_select_prev = false;
+  tilt_x = TILT_X_REST;
+  tilt_y = TILT_Y_REST;
+  tilt_offset = 0;
+  tilt_armed = false;
 
   for (i = 0; i < DMA_CHAN_CNT; i++)
   {
@@ -3245,6 +3326,7 @@ GBA_COLD u32 load_gamepak(const struct retro_game_info* info, const char *name,
    rtc_enabled = false;
    rumble_enabled = false;
    gyro_enabled = false;
+   tilt_enabled = false;
    gpio_hook = NULL;
    gyro_sample = 0;
    gyro_edge = false;
@@ -3338,6 +3420,8 @@ GBA_COLD u32 load_gamepak(const struct retro_game_info* info, const char *name,
    if (gyro_enabled)
       rumble_enabled = true;
    gpio_hook = gyro_enabled ? gpio_rumble_gyro : rumble_enabled ? gpio_rumble : NULL;
+   tilt_read_hook = tilt_enabled ? tilt_read : NULL;
+   tilt_write_hook = tilt_enabled ? tilt_write : NULL;
 
    /* Capture the RTC baseline once per content load (and only here -
     * not in init_memory/reset_gba, so a retro_reset does not change the

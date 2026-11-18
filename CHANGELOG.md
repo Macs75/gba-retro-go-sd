@@ -39,6 +39,12 @@ attached to the release:
     interpreter's exact cycles and stopping points.
   Host, interpreted instructions a frame: story select 87.9K -> 49.7K,
   first level's intro 69.2K -> 46.6K; both recordings replay exactly.
+- **Tilt controls for Yoshi's Universal Gravitation / Yoshi Topsy-Turvy**
+  (the cart's accelerometer at 0x0E008000): the Time button toggles tilt
+  mode (TILT badge); in it L and R tilt the world left and right, while the
+  D-pad still moves Yoshi. A held button is a full tilt (the game only
+  tells level, left and right apart). Playable, but the game is built for
+  the real sensor and is hard to play on buttons.
 - **Tilt controls for WarioWare: Twisted!** (gyro sensor on the cart's
   GPIO): the Time button toggles tilt mode; in it, D-pad left/right turn
   (ramping up while held). A small TILT badge in the bottom-left corner
