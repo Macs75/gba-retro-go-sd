@@ -138,8 +138,15 @@ static int16_t gba_audio_stereo[GBA_AUDIO_FRAMES * 2];
  *
  * 75 KB does not fit the leftover AHB heap on this firmware (~56 KB), so it
  * lives in DTCM (zero-wait, ~104 KB core pool). The scaler reads it once per
- * frame and the DMA never touches it. */
-#define GBA_FRAMEBUFFER_BYTES  (GBA_WIDTH * GBA_HEIGHT * sizeof(uint16_t))
+ * frame and the DMA never touches it.
+ *
+ * One line more than the picture: the OBJ window renders its inside into the
+ * line below the one it draws, as scratch (video.cc render_scanline_objs,
+ * PIXCOPY), so line 159 needs a line 160. Without it that scratch landed on
+ * the BIOS copy allocated next (its IRQ return at 0x34): WarioWare, Inc.'s
+ * disco stage then froze in the BIOS reset path, on the device only, and only
+ * when that frame was drawn. */
+#define GBA_FRAMEBUFFER_BYTES  (GBA_WIDTH * (GBA_HEIGHT + 1) * sizeof(uint16_t))
 static uint16_t *gba_framebuffer;
 
 #ifdef GBA_DTCM_BUFFERS

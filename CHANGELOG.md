@@ -281,6 +281,13 @@ attached to the release:
 
 ### Fixed
 
+- **WarioWare, Inc.: Mega Microgame$! froze at Jimmy's disco stage**
+  (device only): the OBJ window renders its inside into the line below as
+  scratch, so the last line needs a line 160; the 160-line framebuffer had
+  none, and that scratch overwrote the BIOS copy allocated right behind it
+  in DTCM (its interrupt return), sending the game into the BIOS reset path
+  at the next interrupt. Only on drawn frames, so it came and went with frame
+  skipping. The framebuffer now has the spare line (480 bytes).
 - **WarioWare: Twisted! locked up in Jimmy's third stage**: IME (the
   interrupt master enable) is one bit on the hardware, but any non-zero
   value enabled interrupts here. The game turns them off with 0xF200 (bit 0
