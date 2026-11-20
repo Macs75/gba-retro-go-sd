@@ -1045,6 +1045,7 @@ static __attribute__((noinline)) cpu_alert_type cpu_store8(u32 a, u32 v)
     gba_idle_sidefx++;
     return CPU_ALERT_NONE;
   }
+  gba_idle_sidefx++;     /* I/O, video: a side effect too */
   return write_memory8(a, (u8)v);
 }
 
@@ -1055,6 +1056,7 @@ static __attribute__((noinline)) cpu_alert_type cpu_store16(u32 a, u32 v)
     gba_idle_sidefx++;
     return CPU_ALERT_NONE;
   }
+  gba_idle_sidefx++;     /* I/O, video: a side effect too */
   return write_memory16(a, (u16)v);
 }
 
@@ -1065,6 +1067,7 @@ static __attribute__((noinline)) cpu_alert_type cpu_store32(u32 a, u32 v)
     gba_idle_sidefx++;
     return CPU_ALERT_NONE;
   }
+  gba_idle_sidefx++;     /* I/O, video: a side effect too */
   return write_memory32(a, v);
 }
 
@@ -1289,6 +1292,10 @@ static inline __attribute__((always_inline)) cpu_alert_type exec_arm_block_mem_b
     }
     address += 4;
   }
+  /* any block store is a side effect, I/O and video ones included (those
+   * store_aligned32 does not count); once per transfer */
+  if (mode == AccStore)
+    gba_idle_sidefx++;
 
   if (writeback && !writeback_first)
     reg[rn] = endaddr;
@@ -1347,6 +1354,7 @@ static inline __attribute__((always_inline)) cpu_alert_type exec_thumb_block_mem
     if (reglist & (1 << REG_LR)) {
       store_aligned32(address, reg[REG_LR]);
     }
+    gba_idle_sidefx++;   /* I/O and video stores too (see the ARM body) */
   }
 
   if (!writeback_first)
@@ -1384,7 +1392,7 @@ static inline __attribute__((always_inline)) u32 blk_start(
 /* the fast forms; thumb: the low registers plus PC (load) or LR (store) */
 static inline __attribute__((always_inline)) void exec_block_mem_fast(
     u32 rn, u32 reglist, s32 &cycles_remaining, AccMode mode, bool writeback,
-    bool thumb, u32 numops, u32 endaddr, u32 address, u8 *p) {
+    bool thumb, u32 numops, u32 endaddr, u32 address, u8 *p, bool push = false) {
   bool wrbck_base = (1 << rn) & reglist;
   bool base_first = (((1 << rn) - 1) & reglist) == 0;
   bool writeback_first = (mode == AccLoad) || !(wrbck_base && base_first);
@@ -1414,8 +1422,13 @@ static inline __attribute__((always_inline)) void exec_block_mem_fast(
         address32(p, 0) = (i == REG_PC) ? reg[REG_PC] + 4 : reg[i];
     }
   }
+  /* a Thumb push into the window below a calling poll loop's sp is not a
+   * side effect: that loop's probe compares those bytes (gba_idle.c). A
+   * push writes just below the sp it finds, at or under the probe's, so
+   * its start is the whole test. GCC: Thumb push only -- the test at every
+   * block-store site grew execute_arm by 300 bytes, 19 more spills. */
   if (mode == AccStore)
-    gba_idle_sidefx += numops;
+    gba_idle_sidefx += (push && address - gba_idle_stk_lo < 64u) ? 0 : numops;
 
   if (writeback && !writeback_first)
     reg[rn] = endaddr;
@@ -1473,7 +1486,8 @@ static inline cpu_alert_type exec_thumb_block_mem(u32 rn, u32 reglist, s32 &cycl
   u8 *p = blk_fast_ptr(address, numops, mode);
   if (p) {
     exec_block_mem_fast(rn, reglist, cycles_remaining, mode, true, true,
-                        numops, endaddr, address, p);
+                        numops, endaddr, address, p,
+                        mode == AccStore && addr_mode == AddrPreDec);
     return CPU_ALERT_NONE;
   }
   u64 r = exec_thumb_block_mem_rt(rn, reglist, cycles_remaining, mode, addr_mode);

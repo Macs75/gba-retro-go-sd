@@ -179,6 +179,10 @@ SECTIONS
      * rarer rotated/scaled variants: mosaic, wrap, colour paths) stays in
      * the flash: RAM_EMU has no room for it (7 KB short with .bss's pin). */
     build/video.o (.text.*bitmap* .text.*window*)
+    /* code added to an older RAM function's job after the renderers were
+     * placed: here, behind them, so they do not move (the idle search's
+     * calling loops, gba_idle.c IDLE_LATE) */
+    *(.gba_late_text*)
     . = ALIGN(8);
   } >RAM_EMU
 

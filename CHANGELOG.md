@@ -27,6 +27,16 @@ attached to the release:
 
 ### Added
 
+- **The generic wait-loop skip takes loops that call functions** (C code's
+  `while (!flag) check_keys();`): the loop search steps over calls, and the
+  proof covers the whole pass, callees included: the same registers, flags
+  and mode, and no side effect but Thumb pushes into the 64 bytes below sp,
+  which must come out of the pass as they went in. Stores to I/O and video
+  now count as side effects too (they never mattered while no loop with a
+  store could be armed). Power-on census, interpreted instructions a frame:
+  Final Fight One -66%, Advance Wars 2 -43%, Advance Wars -35%, Super Monkey
+  Ball Jr. -6.5%; the other 145 games the same and with identical hashes.
+  Advance Wars' recording: -27% (median window), still exact.
 - **WarioWare: Twisted! runs at full speed in its intro, menus and level
   intros** (it dropped to 14-30 fps):
   - its VBlank wait loop (which steps a random-number generator every pass)

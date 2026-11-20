@@ -22,6 +22,10 @@ int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint32_t c, uint32
 /* reads with a side effect (the EEPROM's bit counter, the backup chip):
  * gba_memory.c counts them, so a pass that made one is never repeated */
 extern uint32_t gba_idle_sidefx;
+/* Thumb pushes (cpu.cc exec_block_mem_fast) at [gba_idle_stk_lo, +64) are
+ * not side effects: the probe of a loop that calls compares those bytes
+ * itself (0: every store counts) */
+extern uint32_t gba_idle_stk_lo;
 
 /* statistics (PROF / host): ARM7 cycles skipped, skips, loops armed,
  * loops rejected */

@@ -90,6 +90,9 @@ static idle_game_fn_t game_head_fn IDLE_GAME_TAIL;
 static int idle_on IDLE_GAME_TAIL;   /* gba_idle_enable ran: the skip is on */
 static uint32_t probe_seq, probe_fx, probe_reg[15], probe_mode, probe_flags, fails;
 static int32_t probe_cycles;
+/* a calling loop's stack check (idle_stk, below), through a pointer */
+static int idle_stk(int take);
+static int (*idle_stk_fn)(int take) __attribute__((section(".gba_tail_bss")));
 
 static void disarm(void)
 {
@@ -126,6 +129,7 @@ void gba_idle_enable(void)
 #endif
     enabled = 1;
     idle_on = 1;
+    idle_stk_fn = idle_stk;
     idle_loop_cond = IDLE_COND_GENERIC;
     gba_idle_reset();
     printf("gba: generic poll-loop skip on\n");
@@ -171,7 +175,11 @@ GBA_IDLE_HOT static int blacklisted(uint32_t pc)
     return 0;
 }
 
-IDLE_RAM static void blacklist(uint32_t pc)
+/* rare (a decode that failed): behind the renderers (IDLE_LATE, below) */
+#ifndef HOST_BUILD
+__attribute__((noinline, section(".gba_late_text.idle")))
+#endif
+static void blacklist(uint32_t pc)
 {
     if (!blacklisted(pc))
         black[black_n++ % NBLACK] = pc >> 6;
@@ -311,6 +319,43 @@ IDLE_RAM static int find_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *t)
 #define IDLE_TAIL_BSS __attribute__((section(".gba_tail_bss")))
 static uint32_t path_pc[MAX_BODY] IDLE_TAIL_BSS, path_tgt[MAX_BODY] IDLE_TAIL_BSS, path_steps IDLE_TAIL_BSS;
 static uint8_t path_taken[MAX_BODY] IDLE_TAIL_BSS;
+/* the path calls a function (walk): set per decode, armed with the loop */
+static uint8_t path_calls IDLE_TAIL_BSS, head_calls IDLE_TAIL_BSS;
+
+/* A call (Thumb BL pair, ARM BL) on a poll loop's path: the walk steps over
+ * it to the instruction after it, the callee undecoded. The probe then
+ * proves the whole pass, callees included: the same registers, flags and
+ * mode, no side effect but Thumb pushes into the 64 bytes below sp, and
+ * those bytes as they were (idle_stk) -- a C wait loop that calls a small
+ * function every pass (`while (!flag) check_keys();`: Advance Wars, 34-39%
+ * of its instructions; Final Fight One, 2026-11-20). Behind the renderers
+ * (IDLE_LATE), as the rest of the new search code: in .gba_ram_text.idle it
+ * moved them. The next instruction's address (after recording the step on
+ * the path), or 0 if a is not a call. */
+#ifndef HOST_BUILD
+#define IDLE_LATE __attribute__((noinline, section(".gba_late_text.idle")))
+#else
+#define IDLE_LATE __attribute__((noinline))
+#endif
+IDLE_LATE static uint32_t call_step(uint32_t a, uint32_t op, int thumb, uint32_t depth)
+{
+    uint32_t next;
+    if (thumb) {
+        const uint8_t *p = code_at(a + 2u);
+        if ((op & 0xF800u) != 0xF000u || !p || ((p[0] | p[1] << 8) & 0xF800u) != 0xF800u)
+            return 0;
+        next = a + 4u;
+    } else {
+        if ((op >> 24) != 0xEBu)           /* an unconditional BL only */
+            return 0;
+        next = a + 4u;
+    }
+    path_pc[depth] = a;
+    path_tgt[depth] = 0xFFFFFFFFu;
+    path_taken[depth] = 0;
+    path_calls = 1;
+    return next;
+}
 
 IDLE_RAM static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
 {
@@ -323,7 +368,9 @@ IDLE_RAM static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
         return 0;
     uint32_t op = thumb ? (uint32_t)(p[0] | p[1] << 8)
                         : (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24);
-    uint32_t tgt, step = thumb ? 2u : 4u;
+    uint32_t tgt, step = thumb ? 2u : 4u, next = call_step(a, op, thumb, depth);
+    if (next)
+        return walk(next, pc, thumb, depth + 1);
     if (!(thumb ? thumb_ok(a, (uint16_t)op, &tgt) : arm_ok(a, op, &tgt)))
         return 0;
     path_pc[depth] = a;
@@ -343,8 +390,9 @@ IDLE_RAM static int walk(uint32_t a, uint32_t pc, int thumb, uint32_t depth)
 
 /* noinline: it runs only when a loop is armed; inlined, it grew the ITCM
  * hook (gba_idle_event) and moved the code after it */
-IDLE_RAM __attribute__((noinline)) static int find_poll_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *l, uint32_t *t)
+IDLE_RAM __attribute__((noinline)) static int find_poll_loop_any(uint32_t pc, int thumb, uint32_t *h, uint32_t *l, uint32_t *t)
 {
+    path_calls = 0;
     if (find_loop(pc, thumb, h, t)) {
         *l = *h;
         return 1;
@@ -366,6 +414,16 @@ IDLE_RAM __attribute__((noinline)) static int find_poll_loop(uint32_t pc, int th
     if ((cheat_master_hook >= *l && cheat_master_hook <= *t) ||
         (m4a_hook_pc && m4a_hook_pc >= *l && m4a_hook_pc <= *t))
         return 0;                          /* hooks the interpreter must reach */
+    return 1;
+}
+
+/* a loop to arm: found, its head not rejected before; head_calls set for it
+ * (here, not in the ITCM hook: the hook arms whatever this returns) */
+IDLE_LATE static int find_poll_loop(uint32_t pc, int thumb, uint32_t *h, uint32_t *l, uint32_t *t)
+{
+    if (!find_poll_loop_any(pc, thumb, h, l, t) || head_rejected(*h))
+        return 0;
+    head_calls = path_calls;
     return 1;
 }
 
@@ -394,7 +452,7 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
     if (blacklisted(pc) && (++black_hits % RETRY))
         return;
     uint32_t l;
-    if (!find_poll_loop(pc, thumb, &h, &l, &t) || head_rejected(h)) {
+    if (!find_poll_loop(pc, thumb, &h, &l, &t)) {
         blacklist(pc);
         return;
     }
@@ -407,9 +465,42 @@ GBA_IDLE_HOT void gba_idle_event(uint32_t pc, int thumb)
     probe_ok = 0;
     fails = 0;
     gba_idle_arms++;
+#ifdef HOST_BUILD   /* the device has no GBA_IDLE_LOG: no dead printf in ITCM */
     if (log_on)
-        printf("IDLE: armed %s loop %08lx-%08lx head %08lx\n", thumb ? "Thumb" : "ARM",
-               (unsigned long)l, (unsigned long)t, (unsigned long)h);
+        printf("IDLE: armed %s loop %08lx-%08lx head %08lx%s\n", thumb ? "Thumb" : "ARM",
+               (unsigned long)l, (unsigned long)t, (unsigned long)h, path_calls ? " (calls)" : "");
+#endif
+}
+
+/* A calling loop's probe (call_step), in addition to gba_idle_head's: the
+ * 64 bytes below sp -- where its passes may push (cpu.cc
+ * exec_block_mem_fast does not count Thumb pushes there while
+ * gba_idle_stk_lo marks them) -- must come out of the pass as they went in.
+ * take: snapshot them; else compare. 0 if sp's window is not in one
+ * work-RAM page (or differs). In the flash, through a pointer (gba_idle_
+ * enable): a few times per event, only for such a loop; no veneer. */
+#define IDLE_STK_WIN 64u
+uint32_t gba_idle_stk_lo IDLE_TAIL_BSS;   /* 0: every store counts */
+static uint32_t probe_stk[IDLE_STK_WIN / 4] IDLE_TAIL_BSS;
+
+#ifndef HOST_BUILD
+__attribute__((noinline, section(".gba_cold_text")))
+#else
+__attribute__((noinline))
+#endif
+static int idle_stk(int take)
+{
+    uint32_t sp = reg[13], wlo = sp - IDLE_STK_WIN;
+    const uint8_t *page = (((wlo >> 24) - 2u) <= 1u && (wlo >> 15) == ((sp - 1u) >> 15))
+                          ? memory_map_read[wlo >> 15] : NULL;
+    if (!page)
+        return 0;
+    const uint8_t *w = page + (wlo & 0x7FFFu);
+    if (!take)
+        return !memcmp(w, probe_stk, IDLE_STK_WIN);
+    memcpy(probe_stk, w, IDLE_STK_WIN);
+    gba_idle_stk_lo = wlo;
+    return 1;
 }
 
 GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, uint32_t c, uint32_t v)
@@ -423,7 +514,8 @@ GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, 
 
     if (probe_ok && probe_seq == seq) {
         if (probe_fx == gba_idle_sidefx && flags == probe_flags && mode == probe_mode &&
-            cycles < probe_cycles && !memcmp(reg, probe_reg, sizeof probe_reg)) {
+            cycles < probe_cycles && !memcmp(reg, probe_reg, sizeof probe_reg) &&
+            (!head_calls || idle_stk_fn(0))) {
             int32_t pass = probe_cycles - cycles;
             int32_t k = (cycles - 1) / pass;
             if (k > 0) {
@@ -436,8 +528,10 @@ GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, 
             return cycles;
         }
         if (++fails >= MAX_FAILS) {        /* its passes differ: not a poll loop */
+#ifdef HOST_BUILD
             if (log_on)
                 printf("IDLE: rejected loop %08lx (passes differ)\n", (unsigned long)head);
+#endif
             gba_idle_rejects++;
             black_head[black_head_n++ % NHEADS] = head;
             blacklist(head);
@@ -452,6 +546,8 @@ GBA_IDLE_HEAD_HOT int32_t gba_idle_head(int32_t cycles, uint32_t n, uint32_t z, 
     probe_mode = mode;
     probe_cycles = cycles;
     memcpy(probe_reg, reg, sizeof probe_reg);
+    if (head_calls && !idle_stk_fn(1))
+        probe_ok = 0;
     return cycles;
 }
 
@@ -579,3 +675,14 @@ static void idle_game_setup(void)
         }
     }
 }
+
+#ifndef HOST_BUILD
+/* ld/layout: .gba_ram_text.idle keeps its former 0x42c bytes, so the
+ * renderers behind it (ld/gba_core.ld: the sprite renderers at the end of
+ * .core_entry) stay at their measured place; the calling-loop code went
+ * behind them (IDLE_LATE) and blacklist with it. If the section's code
+ * changes size, change this: its size in build/gba_core.map + this = 0x42c. */
+__asm__(".pushsection .gba_ram_text.idle,\"ax\",%progbits\n\t"
+        ".space 0x10\n\t"
+        ".popsection");
+#endif
