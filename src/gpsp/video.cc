@@ -1033,32 +1033,29 @@ static const u8 obj_dim_table[3][4][2] = {
   { {8, 16}, {8, 32}, {16, 32}, {32, 64} }
 };
 
-/* The sprites on each line, all priorities in one list: per line priority
- * 0's in OAM order, then 1's, 2's, 3's, then the OBJ window's (4). A line
- * holds at most the 128 OAM entries, so 128 bytes a line is no cap below
- * the hardware's own (its per-line OBJ cycle budget, applied in order_obj).
+/* The sprites on each line: a chain per priority (0-3; 4 the OBJ window),
+ * in the order the renderers draw them (back to front, OAM 127 to 0).
+ * order_obj pushes each sprite on the front of its priority's chain as it
+ * walks OAM 0 to 127: per sprite and line one load and two stores, as the
+ * former per-priority lists cost, and no bound but the hardware's own (its
+ * per-line OBJ cycle budget, applied in order_obj). A renderer follows one
+ * priority's chain and visits none of the others' sprites; nothing sorts.
  * (gpSP kept a list per priority, 128 deep: 100 KB. This core had cut that
  * to 32 deep, which dropped sprites the hardware draws: Kingdom Hearts:
- * Chain of Memories' portrait under two lines of text, 46 sprites on one
- * priority, 2026-11-20.)
- *   count  each priority's sprites on the line   (obj_rows_by_priority)
- *   nm     while order_obj lists them: the line's sprites (low byte) and
- *          a bit per priority present (bits 8-12)
- *   at     where each priority's sprites start in the line's list: a
- *          pointer, not a byte offset, so the sprite renderers load it in
- *          the place of the former lists' address arithmetic at the same
- *          code size (none of them, nor the code behind them, moved)
+ * Chain of Memories' portrait under two lines of text, 2026-11-20; 23 of
+ * 149 games go past 32, tools/gba_objmax_census.sh.)
+ *   head  each priority's first sprite on the line, OBJ_NONE for none
+ *   next  per line, the sprite after this one in its chain
  * ld/layout: pad keeps the former per-priority lists' and counts' 26,400
  * bytes, so nothing behind them in .bss moves. */
+#define OBJ_NONE 0xFF
 static struct {
-  u8 count[5][160];
-  u16 nm[160];
-  const u8 *at[5][160];
-  u8 list[160][128];
-  u8 pad[26400 - 5 * 160 - 160 * 2 - 5 * 160 * 4 - 160 * 128];
+  u8 head[5][160];
+  u8 next[160][128];
+  u8 pad[26400 - 5 * 160 - 160 * 128];
 } obj_lines;
-#define obj_priority_count obj_lines.count
-#define obj_list_at obj_lines.at
+/* a priority's sprites on the line: any? */
+#define obj_line_has(priority, row) (obj_lines.head[priority][row] != OBJ_NONE)
 static u8 obj_alpha_count[160];
 // the rows the lists hold (obj_rows_from..159) and the mode and sprite limit
 // they were built with (update_scanline)
@@ -1545,14 +1542,12 @@ void render_scanline_objs(
 ) {
   stype *scanline = (stype*)raw_ptr;
   s32 vcount = read_ioreg(REG_VCOUNT);
-  s32 objn;
-  u32 objcnt = obj_lines.count[priority][vcount];
-  const u8 *objlist = obj_list_at[priority][vcount];
+  const u8 *next = obj_lines.next[vcount];
 
-  // Render all the visible objects for this priority (back to front)
-  for (objn = objcnt-1; objn >= 0; objn--) {
-    // Objects in the list are pre-filtered and sorted in the appropriate order
-    u32 objoff = objlist[objn];
+  // Render all the visible objects for this priority (back to front): its
+  // chain, pre-filtered and in the drawing order
+  for (u32 objoff = obj_lines.head[priority][vcount]; objoff != OBJ_NONE;
+       objoff = next[objoff]) {
     const t_oam *oamentry = &((t_oam*)oam_ram)[objoff];
 
     u16 obj_attr0 = eswap16(oamentry->attr0);
@@ -1633,7 +1628,7 @@ void render_scanline_objs(
  * one line, each time it grows (tools/gba_objmax_census.sh). Distinct
  * sprites only: entries copied over each other (a zeroed table: 128 of tile
  * 0 at 0,0) draw as one. */
-static void obj_census(u32 row, u32 n, const u8 *list, const u8 *obj_prio)
+static void obj_census(u32 first_row, u32 end_row)
 {
   static int on = -1;
   static u32 mx, mw;
@@ -1643,71 +1638,34 @@ static void obj_census(u32 row, u32 n, const u8 *list, const u8 *obj_prio)
   if (!on)
     return;
   const u16 *oam = (const u16 *)oam_ram;
-  u32 d[5] = { 0, 0, 0, 0, 0 };
-  for (u32 k = 0; k < n; k++) {
-    u32 o = list[k], p = obj_prio[o], dup = 0;
-    for (u32 j = 0; j < k && !dup; j++) {
-      u32 q = list[j];
-      dup = obj_prio[q] == p && oam[q * 4] == oam[o * 4] &&
-            oam[q * 4 + 1] == oam[o * 4 + 1] && oam[q * 4 + 2] == oam[o * 4 + 2];
-    }
-    d[p] += !dup;
-  }
-  u32 m = d[0];
-  for (u32 p = 1; p < 4; p++)
-    if (d[p] > m) m = d[p];
-  if (m > mx || d[4] > mw) {
-    mx = m > mx ? m : mx;
-    mw = d[4] > mw ? d[4] : mw;
-    printf("OBJMAX prio=%u win=%u line=%u frame=%u\n", mx, mw, row, host_frame_no);
-  }
-}
-#endif
-
-/* order_obj lists each row's sprites in OAM order with the priorities they
- * use; here each row gets its count and list start per priority. A row on
- * one priority (most rows; all of Kirby's) is in order as listed. A row
- * that mixes them goes to priority order (stable: OAM order within a
- * priority). Its own function, at a quiet I-cache place (ld). */
-__attribute__((noinline))
-/* GCC: no loop-to-memcpy (a call and a veneer per row) */
-__attribute__((optimize("no-tree-loop-distribute-patterns")))
-static void obj_rows_by_priority(u32 first_row, u32 end_row, const u8 *obj_prio)
-{
-  for (u32 p = 0; p < 5; p++)
-    memset(&obj_lines.count[p][first_row], 0, end_row - first_row);
   for (u32 row = first_row; row < end_row; row++) {
-    u32 v = obj_lines.nm[row];
-    if (!v)
-      continue;
-    u32 n = v & 0xFF, m = v >> 8;
-    u8 *list = obj_lines.list[row];
-#ifdef HOST_BUILD
-    obj_census(row, n, list, obj_prio);
-#endif
-    if (!(m & (m - 1))) {    /* one priority */
-      u32 p = __builtin_ctz(m);
-      obj_lines.count[p][row] = n;
-      obj_list_at[p][row] = list;
-      continue;
-    }
-    u8 c[5] = { 0, 0, 0, 0, 0 };
-    for (u32 k = 0; k < n; k++)
-      c[obj_prio[list[k]]]++;
-    u32 at[5], sum = 0;
+    u32 d[5];
     for (u32 p = 0; p < 5; p++) {
-      at[p] = sum;
-      obj_lines.count[p][row] = c[p];
-      obj_list_at[p][row] = list + sum;
-      sum += c[p];
+      u8 seen[128];
+      u32 n = 0;
+      d[p] = 0;
+      for (u32 o = obj_lines.head[p][row]; o != OBJ_NONE; o = obj_lines.next[row][o]) {
+        u32 dup = 0;
+        for (u32 j = 0; j < n && !dup; j++) {
+          u32 q = seen[j];
+          dup = oam[q * 4] == oam[o * 4] && oam[q * 4 + 1] == oam[o * 4 + 1] &&
+                oam[q * 4 + 2] == oam[o * 4 + 2];
+        }
+        seen[n++] = o;
+        d[p] += !dup;
+      }
     }
-    u8 tmp[128];
-    for (u32 k = 0; k < n; k++)
-      tmp[k] = list[k];
-    for (u32 k = 0; k < n; k++)
-      list[at[obj_prio[tmp[k]]]++] = tmp[k];
+    u32 m = d[0];
+    for (u32 p = 1; p < 4; p++)
+      if (d[p] > m) m = d[p];
+    if (m > mx || d[4] > mw) {
+      mx = m > mx ? m : mx;
+      mw = d[4] > mw ? d[4] : mw;
+      printf("OBJMAX prio=%u win=%u line=%u frame=%u\n", mx, mw, row, host_frame_no);
+    }
   }
 }
+#endif
 
 // Goes through the object list in the OAM (from #127 to #0) and adds objects
 // into a sorted list by priority for the current row.
@@ -1721,9 +1679,9 @@ static void order_obj(u32 video_mode, u32 first_row, u32 end_row, u16 max_rend_c
   u32 row;
   t_oam *oam_base = (t_oam*)oam_ram;
   u16 rend_cycles[160];
-  u8 obj_prio[128];          /* each listed sprite's priority, 4 the OBJ window */
 
-  memset(&obj_lines.nm[first_row], 0, (end_row - first_row) * sizeof(obj_lines.nm[0]));
+  for (u32 p = 0; p < 5; p++)
+    memset(&obj_lines.head[p][first_row], OBJ_NONE, end_row - first_row);
   memset(&obj_alpha_count[first_row], 0, end_row - first_row);
   memset(&rend_cycles[first_row], 0, (end_row - first_row) * sizeof(rend_cycles[0]));
 
@@ -1783,13 +1741,11 @@ static void order_obj(u32 video_mode, u32 first_row, u32 end_row, u16 max_rend_c
 
         switch (obj_mode) {
         case OBJ_MOD_SEMITRAN:
-          obj_prio[obj_num] = obj_priority;
           for(row = starty; row < endy; row++)
           {
-            u32 v = obj_lines.nm[row];
             if (rend_cycles[row] < max_rend_cycles) {
-              obj_lines.list[row][v & 0xFF] = obj_num;
-              obj_lines.nm[row] = (v + 1) | (0x100u << obj_priority);
+              obj_lines.next[row][obj_num] = obj_lines.head[obj_priority][row];
+              obj_lines.head[obj_priority][row] = obj_num;
               rend_cycles[row] += cyccnt;
               // Mark the row as having semi-transparent objects
               obj_alpha_count[row] = 1;
@@ -1801,13 +1757,11 @@ static void order_obj(u32 video_mode, u32 first_row, u32 end_row, u16 max_rend_c
           /* fallthrough */
         case OBJ_MOD_NORMAL:
           // Add the object to the list.
-          obj_prio[obj_num] = obj_priority;
           for(row = starty; row < endy; row++)
           {
-            u32 v = obj_lines.nm[row];
             if (rend_cycles[row] < max_rend_cycles) {
-              obj_lines.list[row][v & 0xFF] = obj_num;
-              obj_lines.nm[row] = (v + 1) | (0x100u << obj_priority);
+              obj_lines.next[row][obj_num] = obj_lines.head[obj_priority][row];
+              obj_lines.head[obj_priority][row] = obj_num;
               rend_cycles[row] += cyccnt;
             }
           }
@@ -1816,7 +1770,9 @@ static void order_obj(u32 video_mode, u32 first_row, u32 end_row, u16 max_rend_c
       }
     }
   }
-  obj_rows_by_priority(first_row, end_row, obj_prio);
+#ifdef HOST_BUILD
+  obj_census(first_row, end_row);
+#endif
 }
 
 u32 layer_order[16];
@@ -1847,7 +1803,7 @@ static void order_layers(u32 layer_flags, u32 vcnt)
 
   for(priority = 3; priority >= 0; priority--)
   {
-    bool anyobj = obj_priority_count[priority][vcnt] > 0;
+    bool anyobj = obj_line_has(priority, vcnt);
     s32 lnum;
 
     for(lnum = 3; lnum >= 0; lnum--)
@@ -2847,7 +2803,7 @@ static void video_trace_line(u16 dispcnt, u32 vcount)
     for (i = 0; i < vt_n; i++)
       if (!memcmp(&vt_tab[i], &k, VT_KEY)) break;
     if (i == vt_n && vt_n < 64) vt_tab[vt_n++] = k;
-    if (i < vt_n) { vt_tab[i].lines++; for (int p = 0; p < 4; p++) vt_tab[i].objlines += obj_priority_count[p][vcount]; vt_tab[i].alines += obj_alpha_count[vcount] != 0; }
+    if (i < vt_n) { vt_tab[i].lines++; for (int p = 0; p < 4; p++) for (u32 o = obj_lines.head[p][vcount]; o != OBJ_NONE; o = obj_lines.next[vcount][o]) vt_tab[i].objlines++; vt_tab[i].alines += obj_alpha_count[vcount] != 0; }
   }
   if (vcount == 159 && ++vt_frame % 120 == 0) {
     qsort(vt_tab, vt_n, sizeof *vt_tab, vt_cmp);

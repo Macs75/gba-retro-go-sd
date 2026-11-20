@@ -322,23 +322,25 @@ attached to the release:
   sprite lists were cut from gpSP's 128 per priority per line (100 KB) to
   32 to fit the RAM, and a line that asked for more dropped the rest: Donald
   Duck's forehead in a Kingdom Hearts: Chain of Memories dialog went missing
-  once the text was written. Now one list a line holds all its sprites (at
-  most the 128 of OAM; the per-line OBJ cycle budget still applies, as on
-  the hardware), in priority order, in the RAM the old lists used. A census
-  (`tools/gba_objmax_census.sh`, 149 games, random input; and the
-  recordings) found 23 games past 32 and 5 past 48: Spyro: Season of Ice
-  73, Bruce Lee: Return of the Legend 57, Rayman Advance 56, Kingdom Hearts:
-  Chain of Memories 52, Yggdra Union 51; then Yoshi's Island 48, Mega Man
-  Zero 2 and FF Tactics Advance 46, Tony Hawk's Pro Skater 3 44, FF V
-  Advance 43, Super Puzzle Fighter II 35. No fixed bound below the
-  hardware's fits the RAM. A line on one priority is in order as listed; a
-  line that mixes them is sorted once per list build (`obj_rows_by_priority`,
-  at 0x0800 mod 8 KB: linked behind the idle code it sat on the busiest
-  I-cache sets of both games below and cost twice as much). Device:
-  Kirby & The Amazing Mirror +0.4% drawing per drawn frame, frames not
-  drawn unchanged; Super Puzzle Fighter II (lists rebuilt ~20 times a
-  frame, priorities mixed) +2.0%, frames not drawn 309 -> 350 over the
-  replay. Every frame identical where no line went past 32.
+  once the text was written. A census (`tools/gba_objmax_census.sh`, 149
+  games, random input; and the recordings) found 23 games past 32 and 5 past
+  48: Spyro: Season of Ice 73, Bruce Lee: Return of the Legend 57, Rayman
+  Advance 56, Kingdom Hearts: Chain of Memories 52, Yggdra Union 51; then
+  Yoshi's Island 48, Mega Man Zero 2 and FF Tactics Advance 46, Tony Hawk's
+  Pro Skater 3 44, FF V Advance 43, Super Puzzle Fighter II 35. No fixed
+  bound below the hardware's fits the RAM. Now each line keeps a chain per
+  priority, in drawing order: order_obj pushes each sprite on the front of
+  its priority's chain (a load and two stores per sprite and line, as the
+  capped lists cost, without the bound; the per-line OBJ cycle budget still
+  applies, as on the hardware), and a renderer follows its priority's chain
+  only. Nothing sorts, in the RAM the old lists used. (A single list a line
+  sorted by priority at each build cost Super Puzzle Fighter II, which
+  rebuilds its lists ~20 times a frame, +2.0% drawing; walking a line's
+  whole list per priority, +1.7%.) Device against the capped lists: Kirby &
+  The Amazing Mirror +0.07% drawing per drawn frame, frames not drawn
+  unchanged; Super Puzzle Fighter II median window 0.0%, +0.43% over the
+  replay, frames not drawn 309 -> 332 (two windows whose skips shifted).
+  Every frame identical where no line went past 32.
 - **WarioWare, Inc.: Mega Microgame$! froze at Jimmy's disco stage**
   (device only): the OBJ window renders its inside into the line below as
   scratch, so the last line needs a line 160; the 160-line framebuffer had

@@ -63,31 +63,24 @@ SECTIONS
     . = ALIGN(. - 0xd24, 0x2000) + 0xd24;
     build/video.o (.text._Z13render_object*)
     build/video.o (.text._ZL16render_w_effects*)
-    /* obj_rows_by_priority (once per sprite-list build, ~20 times a frame
-     * in Super Puzzle Fighter II) at 0x0800 mod 8 KB, in the room the pins
-     * below leave: the quietest place of the hot RAM code of Kirby & The
-     * Amazing Mirror and Super Puzzle Fighter II (callgrind-weighted,
-     * 2026-11-20: 0.08 and 0.12 of their busiest 256 bytes; at 0x1b28, 0.98
-     * and 0.91, it cost Puzzle Fighter's full board 5-10% drawing). The
-     * section starts 0x1000 mod 8 KB, hence 0x1800. */
-    . = ALIGN(. - 0x1800, 0x2000) + 0x1800;
-    build/video.o (.text._ZL20obj_rows_by_priority*)
-    /* order_obj at 0x0074 mod 8 KB, the blended sprite renderers after
-     * it at their measured place, 0x240562ec (Super Puzzle Fighter II runs
-     * 5-7), whatever render_w_effects' size (it grew 924 bytes with the
-     * effect table's loops) and order_obj's (up to 0x278 bytes). */
-    . = ALIGN(. - 0x1074, 0x2000) + 0x1074;
+    /* order_obj at its measured place mod 8 KB (0x240560b4: Super Puzzle
+     * Fighter II runs 5-7), whatever render_w_effects' size (it grew 924
+     * bytes with the effect table's loops); the section starts 0x1000 mod
+     * 8 KB, hence 0x10b4. The blended sprite renderers after it end at
+     * 0x240585b4, where the code behind them was measured: the pins below
+     * hold their sizes of 2026-11-20 (order_obj up to 0x260 bytes, the
+     * renderers 0x107c and 0x1224); one that grows past its pin moves
+     * everything behind it 8 KB (and .bss with it). */
+    . = ALIGN(. - 0x10b4, 0x2000) + 0x10b4;
     build/video.o (.text._ZL9order_obj*)
-    . = ALIGN(. - 0x12ec, 0x2000) + 0x12ec;
+    . = ALIGN(. - 0x1314, 0x2000) + 0x1314;
     /* The blending path's sprite renderers (32-bit line buffer, the indexed
      * and stacked-colour instances) and the per-line window/effects driver:
      * the hottest drawing code of a blended screen, which ran from the flash
      * (Tony's blended menu, PC sampler 2026-11-15). Room for them: the
      * load-time and savestate code went to the flash (GBA_COLD, common.h). */
     build/video.o (.text._Z20render_scanline_objsIjL8rendtype1EEvjjjPvPKt*)
-    /* what follows at its measured place, 0x240573c0 (0x13c0 mod 8 KB),
-     * whatever the renderer above's size (0x3c0 section-relative) */
-    . = ALIGN(. - 0x3c0, 0x2000) + 0x3c0;
+    . = ALIGN(. - 0x390, 0x2000) + 0x390;
     build/video.o (.text._Z20render_scanline_objsIjL8rendtype2EEvjjjPvPKt*)
     build/video.o (.text._ZL27render_scanline_conditionaljjPtj)
 
@@ -152,6 +145,9 @@ SECTIONS
      * update (Super Puzzle Fighter II's early match: 0% -> 1.5% of the
      * device's time from one push to the next, 2026-11-16) */
     build/video.o (.text._Z20render_scanline_objsItL8rendtype1EEvjjjPvPKt*)
+    /* ...the second ending at 0x24067388, where what follows was measured
+     * (its size of 2026-11-20, 0xf68 bytes; 0x1420 section-relative) */
+    . = ALIGN(. - 0x1420, 0x2000) + 0x1420;
     build/video.o (.text._Z20render_scanline_objsItL8rendtype3EEvjjjPvPKt*)
 
     . = ALIGN(4);
@@ -257,6 +253,7 @@ SECTIONS
      * instance; the other four stay in flash), the tile-layer drivers, and
      * the M4A HLE's guest-memory helpers, called per sample. */
     build/video.o (.text._Z20render_scanline_objsItL8rendtype0EEvjjjPvPKt*)
+    . = ALIGN(. - 24, 32) + 24;  /* the code behind at its place mod 32 */
     build/video.o (.text._Z18tile_render_layers*)
     build/m4a_hle.o (.text.rd_* .text.wr_* .text.win_hold)
     /* The text-layer renderer's hot pair: their unrolled tile loops
