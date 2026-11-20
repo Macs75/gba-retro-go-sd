@@ -58,6 +58,10 @@ typedef struct {
     int32_t  cycles;   /* guest cycles; the block subtracts what it spends */
     uint32_t n, z, c, v;
     uint32_t pc;       /* where to resume — set when the block gives way */
+    /* 0: run from the block's entry (pc). Else the offset from pc of the
+     * instruction to start at: the block gave way there to an interrupt and
+     * the interrupt has returned (m4a_gpsp.c), its checks done at the entry */
+    uint32_t resume;
 } m4a_state;
 
 /* What m4a_variant::run gives back. */

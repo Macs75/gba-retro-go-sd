@@ -244,6 +244,14 @@ static int m4a_run_v1_mono(m4a_state *s, const m4a_bus *bus)
     lr = s->r[14];
     n_f = s->n; z_f = s->z; c_f = s->c; v_f = s->v;
 
+    if (s->resume) {               /* validated when the block started */
+        win_init(&wch,  bus);
+        win_init(&wmix, bus);
+        win_init(&wsmp, bus);
+        win_init(&wstk, bus);
+        goto m4a_resume_at;
+    }
+
     /* The mix pointer carries a 2-bit counter in its top bits, and every load and
      * store below assumes that counter is zero — the block only touches memory on
      * a wrap. Were a caller ever to hand us a mid-word pointer, the "addresses"
@@ -270,61 +278,85 @@ static int m4a_run_v1_mono(m4a_state *s, const m4a_bus *bus)
 
 #define FAILED()  (wch.failed || wmix.failed || wsmp.failed || wstk.failed)
 
-    /* 300364c: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
-    /* 3003650: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
-    /* 3003654: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x00cu);
-    /* 3003658: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x010u);
-    /* 300365c: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x014u);
-    /* 3003660: beq   L3754               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x108u); goto L3754; } CHK(0x018u);
+    if (0) {
+m4a_resume_at:
+        switch (s->resume) {
+        case 0x004u: goto R004; case 0x008u: goto R008; case 0x00cu: goto R00c; case 0x010u: goto R010; case 0x014u: goto R014; case 0x018u: goto R018;
+        case 0x01cu: goto R01c; case 0x020u: goto R020; case 0x024u: goto R024; case 0x028u: goto R028; case 0x02cu: goto R02c; case 0x030u: goto R030;
+        case 0x034u: goto R034; case 0x038u: goto R038; case 0x03cu: goto R03c; case 0x040u: goto R040; case 0x044u: goto R044; case 0x048u: goto R048;
+        case 0x04cu: goto R04c; case 0x050u: goto R050; case 0x054u: goto R054; case 0x058u: goto R058; case 0x05cu: goto R05c; case 0x060u: goto R060;
+        case 0x064u: goto R064; case 0x068u: goto R068; case 0x06cu: goto R06c; case 0x070u: goto R070; case 0x074u: goto R074; case 0x078u: goto R078;
+        case 0x07cu: goto R07c; case 0x080u: goto R080; case 0x084u: goto R084; case 0x088u: goto R088; case 0x08cu: goto R08c; case 0x090u: goto R090;
+        case 0x094u: goto R094; case 0x098u: goto R098; case 0x09cu: goto R09c; case 0x0a0u: goto R0a0; case 0x0a4u: goto R0a4; case 0x0a8u: goto R0a8;
+        case 0x0acu: goto R0ac; case 0x0b0u: goto R0b0; case 0x0b4u: goto R0b4; case 0x0b8u: goto R0b8; case 0x0bcu: goto R0bc; case 0x0c0u: goto R0c0;
+        case 0x0c4u: goto R0c4; case 0x0c8u: goto R0c8; case 0x0ccu: goto R0cc; case 0x0d0u: goto R0d0; case 0x0d4u: goto R0d4; case 0x0d8u: goto R0d8;
+        case 0x0dcu: goto R0dc; case 0x0e0u: goto R0e0; case 0x0e4u: goto R0e4; case 0x0e8u: goto R0e8; case 0x0ecu: goto R0ec; case 0x0f0u: goto R0f0;
+        case 0x0f4u: goto R0f4; case 0x0f8u: goto R0f8; case 0x0fcu: goto R0fc; case 0x100u: goto R100; case 0x104u: goto R104; case 0x108u: goto R108;
+        case 0x10cu: goto R10c; case 0x110u: goto R110; case 0x114u: goto R114; case 0x118u: goto R118; case 0x11cu: goto R11c; case 0x120u: goto R120;
+        case 0x124u: goto R124; case 0x128u: goto R128; case 0x12cu: goto R12c; case 0x130u: goto R130; case 0x134u: goto R134; case 0x138u: goto R138;
+        case 0x13cu: goto R13c; case 0x140u: goto R140; case 0x144u: goto R144; case 0x148u: goto R148; case 0x14cu: goto R14c; case 0x150u: goto R150;
+        case 0x154u: goto R154; case 0x158u: goto R158; case 0x15cu: goto R15c; case 0x160u: goto R160; case 0x164u: goto R164; case 0x168u: goto R168;
+        case 0x16cu: goto R16c; case 0x170u: goto R170; case 0x174u: goto R174; case 0x178u: goto R178; case 0x17cu: goto R17c; case 0x180u: goto R180;
+        case 0x184u: goto R184; case 0x188u: goto R188; case 0x18cu: goto R18c; case 0x190u: goto R190;
+        default: return M4A_DECLINED;
+        }
+    }
+
+    R000: ;/* 300364c: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
+    R004: ;/* 3003650: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
+    R008: ;/* 3003654: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x00cu);
+    R00c: ;/* 3003658: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x010u);
+    R010: ;/* 300365c: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x014u);
+    R014: ;/* 3003660: beq   L3754               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x108u); goto L3754; } CHK(0x018u);
 
 L3664:
-    /* 3003664: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x01cu);
-    /* 3003668: ble   L36C0               */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x074u); goto L36C0; } CHK(0x020u);
-    /* 300366c: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x024u);
-    /* 3003670: movgt lr, #0              */ cyc -= 1; if (COND_GT()) lr = 0u; CHK(0x028u);
-    /* 3003674: bgt   L3690               */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x044u); goto L3690; } CHK(0x02cu);
-    /* 3003678: mov   lr, r8              */ lr = r8;                                   cyc -= 1; CHK(0x030u);
-    /* 300367c: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x034u);
-    /* 3003680: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x038u);
-    /* 3003684: sub   lr, lr, r8          */ lr -= r8;                                  cyc -= 1; CHK(0x03cu);
-    /* 3003688: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x040u);
-    /* 300368c: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u; CHK(0x044u);
+    R018: ;/* 3003664: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x01cu);
+    R01c: ;/* 3003668: ble   L36C0               */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x074u); goto L36C0; } CHK(0x020u);
+    R020: ;/* 300366c: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x024u);
+    R024: ;/* 3003670: movgt lr, #0              */ cyc -= 1; if (COND_GT()) lr = 0u; CHK(0x028u);
+    R028: ;/* 3003674: bgt   L3690               */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x044u); goto L3690; } CHK(0x02cu);
+    R02c: ;/* 3003678: mov   lr, r8              */ lr = r8;                                   cyc -= 1; CHK(0x030u);
+    R030: ;/* 300367c: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x034u);
+    R034: ;/* 3003680: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x038u);
+    R038: ;/* 3003684: sub   lr, lr, r8          */ lr -= r8;                                  cyc -= 1; CHK(0x03cu);
+    R03c: ;/* 3003688: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x040u);
+    R040: ;/* 300368c: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u; CHK(0x044u);
 
 L3690:
-    /* 3003690: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x048u);
+    R044: ;/* 3003690: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x048u);
 L3694:
-    /* 3003694: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x04cu);
-    /* 3003698: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x050u);
-    /* 300369c: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x054u);
+    R048: ;/* 3003694: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x04cu);
+    R04c: ;/* 3003698: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x050u);
+    R050: ;/* 300369c: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x054u);
 #ifdef M4A_SABOTAGE
     /* See the note at the other M4A_SABOTAGE below. */
     r1 ^= 0x01000000u;
 #endif
-    /* 30036a0: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x058u);
-    /* 30036a4: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x05cu);
-    /* 30036a8: bcc   L3694               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x048u); goto L3694; } CHK(0x060u);
-    /* 30036ac: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x064u);
-    /* 30036b0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x068u);
-    /* 30036b4: bgt   L3690               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x044u); goto L3690; } CHK(0x06cu);
-    /* 30036b8: adds  r8, r8, lr          */ { uint32_t a = r8, d = a + lr; SET_ADD(a, lr, d); r8 = d; } cyc -= 1; CHK(0x070u);
-    /* 30036bc: beq   L37D4               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x188u); goto L37D4; } CHK(0x074u);
+    R054: ;/* 30036a0: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x058u);
+    R058: ;/* 30036a4: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x05cu);
+    R05c: ;/* 30036a8: bcc   L3694               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x048u); goto L3694; } CHK(0x060u);
+    R060: ;/* 30036ac: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x064u);
+    R064: ;/* 30036b0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x068u);
+    R068: ;/* 30036b4: bgt   L3690               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x044u); goto L3690; } CHK(0x06cu);
+    R06c: ;/* 30036b8: adds  r8, r8, lr          */ { uint32_t a = r8, d = a + lr; SET_ADD(a, lr, d); r8 = d; } cyc -= 1; CHK(0x070u);
+    R070: ;/* 30036bc: beq   L37D4               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x188u); goto L37D4; } CHK(0x074u);
 
 L36C0:
-    /* 30036c0: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x078u);
+    R074: ;/* 30036c0: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x078u);
 L36C4:
-    /* 30036c4: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x07cu);
-    /* 30036c8: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x080u);
-    /* 30036cc: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x084u);
-    /* 30036d0: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x088u);
-    /* 30036d4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x08cu);
-    /* 30036d8: beq   L3724               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0d8u); goto L3724; } CHK(0x090u);
+    R078: ;/* 30036c4: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x07cu);
+    R07c: ;/* 30036c8: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x080u);
+    R080: ;/* 30036cc: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x084u);
+    R084: ;/* 30036d0: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x088u);
+    R088: ;/* 30036d4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x08cu);
+    R08c: ;/* 30036d8: beq   L3724               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0d8u); goto L3724; } CHK(0x090u);
 L36DC:
-    /* 30036dc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x094u);
-    /* 30036e0: bcc   L36C4               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x078u); goto L36C4; } CHK(0x098u);
-    /* 30036e4: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x09cu);
-    /* 30036e8: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0a0u);
-    /* 30036ec: bgt   L3664               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x018u); goto L3664; } CHK(0x0a4u);
-    /* 30036f0: b     L37D4               */ cyc -= 2; CHK(0x188u); goto L37D4;
+    R090: ;/* 30036dc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x094u);
+    R094: ;/* 30036e0: bcc   L36C4               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x078u); goto L36C4; } CHK(0x098u);
+    R098: ;/* 30036e4: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x09cu);
+    R09c: ;/* 30036e8: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0a0u);
+    R0a0: ;/* 30036ec: bgt   L3664               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x018u); goto L3664; } CHK(0x0a4u);
+    R0a4: ;/* 30036f0: b     L37D4               */ cyc -= 2; CHK(0x188u); goto L37D4;
 
 L36F4:
     /* The sample ran out. Note that these are read AFTER the push at L3754 moved
@@ -339,59 +371,59 @@ L36F4:
      * that window stacks itself at whatever sp SAYS. Say the wrong one and the
      * handler writes over the r4 and ip we just pushed, and the mixer comes back
      * to a channel pointer that is now a return address. */
-    /* 30036f4: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0acu);
-    /* 30036f8: cmp   r0, #0              */ SET_CMP0(r0); cyc -= 1; CHK(0x0b0u);
-    /* 30036fc: beq   L3718               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0ccu); goto L3718; } CHK(0x0b4u);
-    /* 3003700: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x0b8u);
-    /* 3003704: rsb   r9, r2, #0          */ r9 = 0u - r2;                              cyc -= 1; CHK(0x0bcu);
+    R0a8: ;/* 30036f4: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0acu);
+    R0ac: ;/* 30036f8: cmp   r0, #0              */ SET_CMP0(r0); cyc -= 1; CHK(0x0b0u);
+    R0b0: ;/* 30036fc: beq   L3718               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0ccu); goto L3718; } CHK(0x0b4u);
+    R0b4: ;/* 3003700: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x0b8u);
+    R0b8: ;/* 3003704: rsb   r9, r2, #0          */ r9 = 0u - r2;                              cyc -= 1; CHK(0x0bcu);
 L3708:
-    /* 3003708: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x0c0u);
-    /* 300370c: bgt   L37A8               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x15cu); goto L37A8; } CHK(0x0c4u);
-    /* 3003710: sub   r9, r9, r0          */ r9 -= r0;                                  cyc -= 1; CHK(0x0c8u);
-    /* 3003714: b     L3708               */ cyc -= 2; CHK(0x0bcu); goto L3708;
+    R0bc: ;/* 3003708: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x0c0u);
+    R0c0: ;/* 300370c: bgt   L37A8               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x15cu); goto L37A8; } CHK(0x0c4u);
+    R0c4: ;/* 3003710: sub   r9, r9, r0          */ r9 -= r0;                                  cyc -= 1; CHK(0x0c8u);
+    R0c8: ;/* 3003714: b     L3708               */ cyc -= 2; CHK(0x0bcu); goto L3708;
 
 L3718:
-    /* 3003718: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R0cc: ;/* 3003718: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x0d0u);
-    /* 300371c: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x0d4u);
-    /* 3003720: b     L3734               */ cyc -= 2; CHK(0x0e8u); goto L3734;
+    R0d0: ;/* 300371c: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x0d4u);
+    R0d4: ;/* 3003720: b     L3734               */ cyc -= 2; CHK(0x0e8u); goto L3734;
 
 L3724:
-    /* 3003724: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x0dcu);
-    /* 3003728: cmp   r2, #0              */ SET_CMP0(r2); cyc -= 1; CHK(0x0e0u);
-    /* 300372c: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x0e4u);
-    /* 3003730: bne   L36DC               */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x090u); goto L36DC; } CHK(0x0e8u);
+    R0d8: ;/* 3003724: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x0dcu);
+    R0dc: ;/* 3003728: cmp   r2, #0              */ SET_CMP0(r2); cyc -= 1; CHK(0x0e0u);
+    R0e0: ;/* 300372c: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x0e4u);
+    R0e4: ;/* 3003730: bne   L36DC               */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x090u); goto L36DC; } CHK(0x0e8u);
 
 L3734:
-    /* 3003734: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x0ecu);
-    /* 3003738: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x0f0u);
-    /* 300373c: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x0f4u);
-    /* 3003740: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x0f8u);
-    /* 3003744: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x0fcu);
-    /* 3003748: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x100u);
-    /* 300374c: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x104u);
-    /* 3003750: b     L37DC               */ cyc -= 2; CHK(0x190u); goto L37DC;
+    R0e8: ;/* 3003734: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x0ecu);
+    R0ec: ;/* 3003738: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x0f0u);
+    R0f0: ;/* 300373c: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x0f4u);
+    R0f4: ;/* 3003740: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x0f8u);
+    R0f8: ;/* 3003744: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x0fcu);
+    R0fc: ;/* 3003748: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x100u);
+    R100: ;/* 300374c: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x104u);
+    R104: ;/* 3003750: b     L37DC               */ cyc -= 2; CHK(0x190u); goto L37DC;
 
 L3754:
-    /* 3003754: push  {r4, ip}            */ sp -= 8u;
+    R108: ;/* 3003754: push  {r4, ip}            */ sp -= 8u;
                                              wr_u32(&wstk, sp, r4, &cyc, 1);
                                              wr_u32(&wstk, sp + 4u, ip, &cyc, 1);       cyc -= 1; CHK(0x10cu);
-    /* 3003758: ldr   lr, [r4, #28]       */ lr = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x110u);
-    /* 300375c: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x114u);
-    /* 3003760: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x118u);
-    /* 3003764: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x11cu);
-    /* 3003768: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x120u);
-    /* 300376c: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x124u);
+    R10c: ;/* 3003758: ldr   lr, [r4, #28]       */ lr = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x110u);
+    R110: ;/* 300375c: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x114u);
+    R114: ;/* 3003760: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x118u);
+    R118: ;/* 3003764: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x11cu);
+    R11c: ;/* 3003768: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x120u);
+    R120: ;/* 300376c: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x124u);
     if (FAILED()) return M4A_DECLINED;
 
 L3770:
-    /* 3003770: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x128u);
+    R124: ;/* 3003770: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x128u);
 L3774:
-    /* 3003774: mul   r9, lr, r1          */ r9 = lr * r1;                              cyc -= 1; CHK(0x12cu);
-    /* 3003778: add   r9, r0, r9, asr #23 */ r9 = r0 + (uint32_t)(((int32_t)r9) >> 23); cyc -= 1; CHK(0x130u);
-    /* 300377c: mul   ip, sl, r9          */ ip = sl * r9;                              cyc -= 1; CHK(0x134u);
-    /* 3003780: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x138u);
+    R128: ;/* 3003774: mul   r9, lr, r1          */ r9 = lr * r1;                              cyc -= 1; CHK(0x12cu);
+    R12c: ;/* 3003778: add   r9, r0, r9, asr #23 */ r9 = r0 + (uint32_t)(((int32_t)r9) >> 23); cyc -= 1; CHK(0x130u);
+    R130: ;/* 300377c: mul   ip, sl, r9          */ ip = sl * r9;                              cyc -= 1; CHK(0x134u);
+    R134: ;/* 3003780: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x138u);
 #ifdef M4A_SABOTAGE
     /* prove.sh builds this on purpose, to check the verifier can tell. It is the
      * smallest lie the block could tell: one sample, one step quieter. Nothing
@@ -410,38 +442,38 @@ L3774:
      *    is what bit 24 is. */
     ip ^= 0x01000000u;
 #endif
-    /* 3003784: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x13cu);
-    /* 3003788: add   lr, lr, r4          */ lr += r4;                                  cyc -= 1; CHK(0x140u);
-    /* 300378c: lsrs  r9, lr, #23         */ r9 = lr >> 23; SET_LOGIC(r9); c_f = (lr >> 22) & 1u; cyc -= 1; CHK(0x144u);
-    /* 3003790: beq   L37B4               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x168u); goto L37B4; } CHK(0x148u);
-    /* 3003794: bic   lr, lr, #0x3f800000 */ lr &= ~0x3f800000u;                        cyc -= 1; CHK(0x14cu);
-    /* 3003798: subs  r2, r2, r9          */ { uint32_t a = r2, d = a - r9; SET_SUB(a, r9, d); r2 = d; } cyc -= 1; CHK(0x150u);
-    /* 300379c: ble   L36F4               */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0a8u); goto L36F4; } CHK(0x154u);
-    /* 30037a0: subs  r9, r9, #1          */ { uint32_t a = r9, d = a - 1u; SET_SUB(a, 1u, d); r9 = d; } cyc -= 1; CHK(0x158u);
-    /* 30037a4: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1; CHK(0x15cu);
+    R138: ;/* 3003784: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x13cu);
+    R13c: ;/* 3003788: add   lr, lr, r4          */ lr += r4;                                  cyc -= 1; CHK(0x140u);
+    R140: ;/* 300378c: lsrs  r9, lr, #23         */ r9 = lr >> 23; SET_LOGIC(r9); c_f = (lr >> 22) & 1u; cyc -= 1; CHK(0x144u);
+    R144: ;/* 3003790: beq   L37B4               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x168u); goto L37B4; } CHK(0x148u);
+    R148: ;/* 3003794: bic   lr, lr, #0x3f800000 */ lr &= ~0x3f800000u;                        cyc -= 1; CHK(0x14cu);
+    R14c: ;/* 3003798: subs  r2, r2, r9          */ { uint32_t a = r2, d = a - r9; SET_SUB(a, r9, d); r2 = d; } cyc -= 1; CHK(0x150u);
+    R150: ;/* 300379c: ble   L36F4               */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0a8u); goto L36F4; } CHK(0x154u);
+    R154: ;/* 30037a0: subs  r9, r9, #1          */ { uint32_t a = r9, d = a - 1u; SET_SUB(a, 1u, d); r9 = d; } cyc -= 1; CHK(0x158u);
+    R158: ;/* 30037a4: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1; CHK(0x15cu);
 L37A8:
-    /* 30037a8: ldrsbne r0, [r3, r9]!     */ if (!z_f) { r3 += r9;
+    R15c: ;/* 30037a8: ldrsbne r0, [r3, r9]!     */ if (!z_f) { r3 += r9;
                                                  r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); }
                                              cyc -= 1; CHK(0x160u);
-    /* 30037ac: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x164u);
-    /* 30037b0: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x168u);
+    R160: ;/* 30037ac: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x164u);
+    R164: ;/* 30037b0: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x168u);
 L37B4:
-    /* 30037b4: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x16cu);
-    /* 30037b8: bcc   L3774               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x128u); goto L3774; } CHK(0x170u);
-    /* 30037bc: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x174u);
-    /* 30037c0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x178u);
-    /* 30037c4: bgt   L3770               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x124u); goto L3770; } CHK(0x17cu);
-    /* 30037c8: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x180u);
-    /* 30037cc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R168: ;/* 30037b4: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x16cu);
+    R16c: ;/* 30037b8: bcc   L3774               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x128u); goto L3774; } CHK(0x170u);
+    R170: ;/* 30037bc: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x174u);
+    R174: ;/* 30037c0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x178u);
+    R178: ;/* 30037c4: bgt   L3770               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x124u); goto L3770; } CHK(0x17cu);
+    R17c: ;/* 30037c8: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x180u);
+    R180: ;/* 30037cc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x184u);
-    /* 30037d0: str   lr, [r4, #28]       */ wr_u32(&wch, r4 + 28u, lr, &cyc, 0);       cyc -= 1; CHK(0x188u);
+    R184: ;/* 30037d0: str   lr, [r4, #28]       */ wr_u32(&wch, r4 + 28u, lr, &cyc, 0);       cyc -= 1; CHK(0x188u);
 
 L37D4:
-    /* 30037d4: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x18cu);
-    /* 30037d8: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x190u);
+    R188: ;/* 30037d4: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x18cu);
+    R18c: ;/* 30037d8: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x190u);
 L37DC:
-    /* 30037dc: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1; CHK(0x194u);
+    R190: ;/* 30037dc: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1; CHK(0x194u);
     /* That last `cyc -= 1` is the end-of-instruction fetch charge, and it belongs
      * here because the block is accounted for ENTIRELY in this function: gpSP
      * resumes at `m4a_resume`, which sits just past its own
@@ -548,6 +580,14 @@ static int m4a_run_v2_stereo(m4a_state *s, const m4a_bus *bus)
     ip = s->r[12]; sp = s->r[13]; lr = s->r[14];
     n_f = s->n; z_f = s->z; c_f = s->c; v_f = s->v;
 
+    if (s->resume) {               /* validated when the block started */
+        win_init(&wch,  bus);
+        win_init(&wmix, bus);
+        win_init(&wsmp, bus);
+        win_init(&wstk, bus);
+        goto m4a_resume_at;
+    }
+
     if ((r5 >> 30) != 0u)
         return M4A_DECLINED;
     if (!writable_region(r5) || !writable_region(r4) || !writable_region(sp))
@@ -575,176 +615,204 @@ static int m4a_run_v2_stereo(m4a_state *s, const m4a_bus *bus)
 
 #define FAILED()  (wch.failed || wmix.failed || wsmp.failed || wstk.failed)
 
-    /* 3001c44: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
-    /* 3001c48: ldr   r9, [r4, #28]       */ r9 = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x008u);
-    /* 3001c4c: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x00cu);
-    /* 3001c50: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x010u);
-    /* 3001c54: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x014u);
-    /* 3001c58: tst   r0, #48             */ SET_LOGIC(r0 & 0x30u);                     cyc -= 1; CHK(0x018u);
-    /* 3001c5c: beq   L1C68               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x024u); goto L1C68; } CHK(0x01cu);
-    /* 3001c60: bl    <sample setup>      */
-    /* 3001c64: b     L1E28               */
+    if (0) {
+m4a_resume_at:
+        switch (s->resume) {
+        case 0x004u: goto R004; case 0x008u: goto R008; case 0x00cu: goto R00c; case 0x010u: goto R010; case 0x014u: goto R014; case 0x018u: goto R018;
+        case 0x01cu: goto R01c; case 0x020u: goto R020; case 0x024u: goto R024; case 0x028u: goto R028; case 0x02cu: goto R02c; case 0x030u: goto R030;
+        case 0x034u: goto R034; case 0x038u: goto R038; case 0x03cu: goto R03c; case 0x040u: goto R040; case 0x044u: goto R044; case 0x048u: goto R048;
+        case 0x04cu: goto R04c; case 0x050u: goto R050; case 0x054u: goto R054; case 0x058u: goto R058; case 0x05cu: goto R05c; case 0x060u: goto R060;
+        case 0x064u: goto R064; case 0x068u: goto R068; case 0x06cu: goto R06c; case 0x070u: goto R070; case 0x074u: goto R074; case 0x078u: goto R078;
+        case 0x07cu: goto R07c; case 0x080u: goto R080; case 0x084u: goto R084; case 0x088u: goto R088; case 0x08cu: goto R08c; case 0x090u: goto R090;
+        case 0x094u: goto R094; case 0x098u: goto R098; case 0x09cu: goto R09c; case 0x0a0u: goto R0a0; case 0x0a4u: goto R0a4; case 0x0a8u: goto R0a8;
+        case 0x0acu: goto R0ac; case 0x0b0u: goto R0b0; case 0x0b4u: goto R0b4; case 0x0b8u: goto R0b8; case 0x0bcu: goto R0bc; case 0x0c0u: goto R0c0;
+        case 0x0c4u: goto R0c4; case 0x0c8u: goto R0c8; case 0x0ccu: goto R0cc; case 0x0d0u: goto R0d0; case 0x0d4u: goto R0d4; case 0x0d8u: goto R0d8;
+        case 0x0dcu: goto R0dc; case 0x0e0u: goto R0e0; case 0x0e4u: goto R0e4; case 0x0e8u: goto R0e8; case 0x0ecu: goto R0ec; case 0x0f0u: goto R0f0;
+        case 0x0f4u: goto R0f4; case 0x0f8u: goto R0f8; case 0x0fcu: goto R0fc; case 0x100u: goto R100; case 0x104u: goto R104; case 0x108u: goto R108;
+        case 0x10cu: goto R10c; case 0x110u: goto R110; case 0x114u: goto R114; case 0x118u: goto R118; case 0x11cu: goto R11c; case 0x120u: goto R120;
+        case 0x124u: goto R124; case 0x128u: goto R128; case 0x12cu: goto R12c; case 0x130u: goto R130; case 0x134u: goto R134; case 0x138u: goto R138;
+        case 0x13cu: goto R13c; case 0x140u: goto R140; case 0x144u: goto R144; case 0x148u: goto R148; case 0x14cu: goto R14c; case 0x150u: goto R150;
+        case 0x154u: goto R154; case 0x158u: goto R158; case 0x15cu: goto R15c; case 0x160u: goto R160; case 0x164u: goto R164; case 0x168u: goto R168;
+        case 0x16cu: goto R16c; case 0x170u: goto R170; case 0x174u: goto R174; case 0x178u: goto R178; case 0x17cu: goto R17c; case 0x180u: goto R180;
+        case 0x184u: goto R184; case 0x188u: goto R188; case 0x18cu: goto R18c; case 0x190u: goto R190; case 0x194u: goto R194; case 0x198u: goto R198;
+        case 0x19cu: goto R19c; case 0x1a0u: goto R1a0; case 0x1a4u: goto R1a4; case 0x1a8u: goto R1a8; case 0x1acu: goto R1ac; case 0x1b0u: goto R1b0;
+        case 0x1b4u: goto R1b4; case 0x1b8u: goto R1b8; case 0x1bcu: goto R1bc; case 0x1c0u: goto R1c0; case 0x1c4u: goto R1c4; case 0x1c8u: goto R1c8;
+        case 0x1ccu: goto R1cc; case 0x1d0u: goto R1d0; case 0x1d4u: goto R1d4; case 0x1d8u: goto R1d8; case 0x1dcu: goto R1dc; case 0x1e0u: goto R1e0;
+        case 0x1e4u: goto R1e4; case 0x1e8u: goto R1e8; case 0x1ecu: goto R1ec; case 0x1f0u: goto R1f0;
+        default: return M4A_DECLINED;
+        }
+    }
+
+    R000: ;/* 3001c44: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
+    R004: ;/* 3001c48: ldr   r9, [r4, #28]       */ r9 = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x008u);
+    R008: ;/* 3001c4c: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x00cu);
+    R00c: ;/* 3001c50: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x010u);
+    R010: ;/* 3001c54: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x014u);
+    R014: ;/* 3001c58: tst   r0, #48             */ SET_LOGIC(r0 & 0x30u);                     cyc -= 1; CHK(0x018u);
+    R018: ;/* 3001c5c: beq   L1C68               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x024u); goto L1C68; } CHK(0x01cu);
+    R01c: ;/* 3001c60: bl    <sample setup>      */
+    R020: ;/* 3001c64: b     L1E28               */
     /* Unreachable: the status byte was checked above and those blocks declined.
      * If we are here, the check and the code disagree, and the code wins. */
     return M4A_DECLINED;
 
 L1C68:
-    /* 3001c68: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x028u);
-    /* 3001c6c: lsl   fp, fp, #16         */ fp <<= 16;                                 cyc -= 1; CHK(0x02cu);
-    /* 3001c70: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x030u);
-    /* 3001c74: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x034u);
-    /* 3001c78: beq   L1D9C               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x158u); goto L1D9C; } CHK(0x038u);
+    R024: ;/* 3001c68: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x028u);
+    R028: ;/* 3001c6c: lsl   fp, fp, #16         */ fp <<= 16;                                 cyc -= 1; CHK(0x02cu);
+    R02c: ;/* 3001c70: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x030u);
+    R030: ;/* 3001c74: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x034u);
+    R034: ;/* 3001c78: beq   L1D9C               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x158u); goto L1D9C; } CHK(0x038u);
 
 L1C7C:
-    /* 3001c7c: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x03cu);
-    /* 3001c80: ble   L1CEC               */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0a8u); goto L1CEC; } CHK(0x040u);
-    /* 3001c84: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x044u);
-    /* 3001c88: movgt r9, #0              */ cyc -= 1; if (COND_GT()) r9 = 0u;          CHK(0x048u);
-    /* 3001c8c: bgt   L1CA8               */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x064u); goto L1CA8; } CHK(0x04cu);
-    /* 3001c90: mov   r9, r8              */ r9 = r8;                                   cyc -= 1; CHK(0x050u);
-    /* 3001c94: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x054u);
-    /* 3001c98: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x058u);
-    /* 3001c9c: sub   r9, r9, r8          */ r9 -= r8;                                  cyc -= 1; CHK(0x05cu);
-    /* 3001ca0: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x060u);
-    /* 3001ca4: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u;                CHK(0x064u);
+    R038: ;/* 3001c7c: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x03cu);
+    R03c: ;/* 3001c80: ble   L1CEC               */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0a8u); goto L1CEC; } CHK(0x040u);
+    R040: ;/* 3001c84: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x044u);
+    R044: ;/* 3001c88: movgt r9, #0              */ cyc -= 1; if (COND_GT()) r9 = 0u;          CHK(0x048u);
+    R048: ;/* 3001c8c: bgt   L1CA8               */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x064u); goto L1CA8; } CHK(0x04cu);
+    R04c: ;/* 3001c90: mov   r9, r8              */ r9 = r8;                                   cyc -= 1; CHK(0x050u);
+    R050: ;/* 3001c94: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x054u);
+    R054: ;/* 3001c98: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x058u);
+    R058: ;/* 3001c9c: sub   r9, r9, r8          */ r9 -= r8;                                  cyc -= 1; CHK(0x05cu);
+    R05c: ;/* 3001ca0: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x060u);
+    R060: ;/* 3001ca4: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u;                CHK(0x064u);
 
 L1CA8:
-    /* 3001ca8: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x068u);
-    /* 3001cac: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x06cu);
+    R064: ;/* 3001ca8: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x068u);
+    R068: ;/* 3001cac: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x06cu);
 L1CB0:
-    /* 3001cb0: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x070u);
-    /* 3001cb4: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x074u);
-    /* 3001cb8: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x078u);
-    /* 3001cbc: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x07cu);
-    /* 3001cc0: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x080u);
-    /* 3001cc4: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x084u);
-    /* 3001cc8: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x088u);
-    /* 3001ccc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x08cu);
-    /* 3001cd0: bcc   L1CB0               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x06cu); goto L1CB0; } CHK(0x090u);
-    /* 3001cd4: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x094u);
-    /* 3001cd8: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x098u);
-    /* 3001cdc: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x09cu);
-    /* 3001ce0: bgt   L1CA8               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x064u); goto L1CA8; } CHK(0x0a0u);
-    /* 3001ce4: adds  r8, r8, r9          */ { uint32_t a = r8, d = a + r9; SET_ADD(a, r9, d); r8 = d; } cyc -= 1; CHK(0x0a4u);
-    /* 3001ce8: beq   L1E2C               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1e8u); goto L1E2C; } CHK(0x0a8u);
+    R06c: ;/* 3001cb0: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x070u);
+    R070: ;/* 3001cb4: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x074u);
+    R074: ;/* 3001cb8: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x078u);
+    R078: ;/* 3001cbc: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x07cu);
+    R07c: ;/* 3001cc0: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x080u);
+    R080: ;/* 3001cc4: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x084u);
+    R084: ;/* 3001cc8: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x088u);
+    R088: ;/* 3001ccc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x08cu);
+    R08c: ;/* 3001cd0: bcc   L1CB0               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x06cu); goto L1CB0; } CHK(0x090u);
+    R090: ;/* 3001cd4: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x094u);
+    R094: ;/* 3001cd8: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x098u);
+    R098: ;/* 3001cdc: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x09cu);
+    R09c: ;/* 3001ce0: bgt   L1CA8               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x064u); goto L1CA8; } CHK(0x0a0u);
+    R0a0: ;/* 3001ce4: adds  r8, r8, r9          */ { uint32_t a = r8, d = a + r9; SET_ADD(a, r9, d); r8 = d; } cyc -= 1; CHK(0x0a4u);
+    R0a4: ;/* 3001ce8: beq   L1E2C               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1e8u); goto L1E2C; } CHK(0x0a8u);
 
 L1CEC:
-    /* 3001cec: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x0acu);
-    /* 3001cf0: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x0b0u);
+    R0a8: ;/* 3001cec: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x0acu);
+    R0ac: ;/* 3001cf0: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x0b0u);
 L1CF4:
-    /* 3001cf4: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x0b4u);
-    /* 3001cf8: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x0b8u);
-    /* 3001cfc: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0bcu);
-    /* 3001d00: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x0c0u);
-    /* 3001d04: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x0c4u);
-    /* 3001d08: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0c8u);
-    /* 3001d0c: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x0ccu);
-    /* 3001d10: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0d0u);
-    /* 3001d14: beq   L1D64               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x120u); goto L1D64; } CHK(0x0d4u);
+    R0b0: ;/* 3001cf4: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x0b4u);
+    R0b4: ;/* 3001cf8: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x0b8u);
+    R0b8: ;/* 3001cfc: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0bcu);
+    R0bc: ;/* 3001d00: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x0c0u);
+    R0c0: ;/* 3001d04: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x0c4u);
+    R0c4: ;/* 3001d08: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0c8u);
+    R0c8: ;/* 3001d0c: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x0ccu);
+    R0cc: ;/* 3001d10: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0d0u);
+    R0d0: ;/* 3001d14: beq   L1D64               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x120u); goto L1D64; } CHK(0x0d4u);
 L1D18:
-    /* 3001d18: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x0d8u);
-    /* 3001d1c: bcc   L1CF4               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0b0u); goto L1CF4; } CHK(0x0dcu);
-    /* 3001d20: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x0e0u);
-    /* 3001d24: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x0e4u);
-    /* 3001d28: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0e8u);
-    /* 3001d2c: bgt   L1C7C               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x038u); goto L1C7C; } CHK(0x0ecu);
-    /* 3001d30: b     L1E2C               */ cyc -= 2; CHK(0x1e8u); goto L1E2C;
+    R0d4: ;/* 3001d18: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x0d8u);
+    R0d8: ;/* 3001d1c: bcc   L1CF4               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0b0u); goto L1CF4; } CHK(0x0dcu);
+    R0dc: ;/* 3001d20: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x0e0u);
+    R0e0: ;/* 3001d24: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x0e4u);
+    R0e4: ;/* 3001d28: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0e8u);
+    R0e8: ;/* 3001d2c: bgt   L1C7C               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x038u); goto L1C7C; } CHK(0x0ecu);
+    R0ec: ;/* 3001d30: b     L1E2C               */ cyc -= 2; CHK(0x1e8u); goto L1E2C;
 
 L1D34:
-    /* 3001d34: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0f4u);
-    /* 3001d38: cmp   r0, #0              */ SET_CMP0(r0);                              cyc -= 1; CHK(0x0f8u);
-    /* 3001d3c: beq   L1D58               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x114u); goto L1D58; } CHK(0x0fcu);
-    /* 3001d40: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x100u);
-    /* 3001d44: rsb   lr, r2, #0          */ lr = 0u - r2;                              cyc -= 1; CHK(0x104u);
+    R0f0: ;/* 3001d34: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0f4u);
+    R0f4: ;/* 3001d38: cmp   r0, #0              */ SET_CMP0(r0);                              cyc -= 1; CHK(0x0f8u);
+    R0f8: ;/* 3001d3c: beq   L1D58               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x114u); goto L1D58; } CHK(0x0fcu);
+    R0fc: ;/* 3001d40: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x100u);
+    R100: ;/* 3001d44: rsb   lr, r2, #0          */ lr = 0u - r2;                              cyc -= 1; CHK(0x104u);
 L1D48:
-    /* 3001d48: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x108u);
-    /* 3001d4c: bgt   L1DFC               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x1b8u); goto L1DFC; } CHK(0x10cu);
-    /* 3001d50: sub   lr, lr, r0          */ lr -= r0;                                  cyc -= 1; CHK(0x110u);
-    /* 3001d54: b     L1D48               */ cyc -= 2; CHK(0x104u); goto L1D48;
+    R104: ;/* 3001d48: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x108u);
+    R108: ;/* 3001d4c: bgt   L1DFC               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x1b8u); goto L1DFC; } CHK(0x10cu);
+    R10c: ;/* 3001d50: sub   lr, lr, r0          */ lr -= r0;                                  cyc -= 1; CHK(0x110u);
+    R110: ;/* 3001d54: b     L1D48               */ cyc -= 2; CHK(0x104u); goto L1D48;
 
 L1D58:
-    /* 3001d58: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R114: ;/* 3001d58: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x118u);
-    /* 3001d5c: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x11cu);
-    /* 3001d60: b     L1D74               */ cyc -= 2; CHK(0x130u); goto L1D74;
+    R118: ;/* 3001d5c: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x11cu);
+    R11c: ;/* 3001d60: b     L1D74               */ cyc -= 2; CHK(0x130u); goto L1D74;
 
 L1D64:
-    /* 3001d64: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x124u);
-    /* 3001d68: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x128u);
-    /* 3001d6c: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x12cu);
-    /* 3001d70: bne   L1D18               */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d4u); goto L1D18; } CHK(0x130u);
+    R120: ;/* 3001d64: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x124u);
+    R124: ;/* 3001d68: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x128u);
+    R128: ;/* 3001d6c: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x12cu);
+    R12c: ;/* 3001d70: bne   L1D18               */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d4u); goto L1D18; } CHK(0x130u);
 
 L1D74:
-    /* 3001d74: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x134u);
-    /* 3001d78: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x138u);
-    /* 3001d7c: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x13cu);
-    /* 3001d80: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x140u);
-    /* 3001d84: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x144u);
-    /* 3001d88: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x148u);
-    /* 3001d8c: ror   r7, r7, r0          */ r7 = ror32(r7, r0 & 0xffu);                cyc -= 1; CHK(0x14cu);
-    /* 3001d90: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x150u);
-    /* 3001d94: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x154u);
-    /* 3001d98: b     L1E34               */ cyc -= 2; CHK(0x1f0u); goto L1E34;
+    R130: ;/* 3001d74: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x134u);
+    R134: ;/* 3001d78: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x138u);
+    R138: ;/* 3001d7c: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x13cu);
+    R13c: ;/* 3001d80: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x140u);
+    R140: ;/* 3001d84: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x144u);
+    R144: ;/* 3001d88: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x148u);
+    R148: ;/* 3001d8c: ror   r7, r7, r0          */ r7 = ror32(r7, r0 & 0xffu);                cyc -= 1; CHK(0x14cu);
+    R14c: ;/* 3001d90: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x150u);
+    R150: ;/* 3001d94: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x154u);
+    R154: ;/* 3001d98: b     L1E34               */ cyc -= 2; CHK(0x1f0u); goto L1E34;
 
 L1D9C:
-    /* 3001d9c: push  {r4, ip}            */ sp -= 8u;
+    R158: ;/* 3001d9c: push  {r4, ip}            */ sp -= 8u;
                                              wr_u32(&wstk, sp, r4, &cyc, 1);
                                              wr_u32(&wstk, sp + 4u, ip, &cyc, 1);       cyc -= 1; CHK(0x15cu);
-    /* 3001da0: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x160u);
-    /* 3001da4: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x164u);
-    /* 3001da8: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x168u);
-    /* 3001dac: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x16cu);
-    /* 3001db0: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x170u);
+    R15c: ;/* 3001da0: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x160u);
+    R160: ;/* 3001da4: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x164u);
+    R164: ;/* 3001da8: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x168u);
+    R168: ;/* 3001dac: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x16cu);
+    R16c: ;/* 3001db0: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x170u);
 
 L1DB4:
-    /* 3001db4: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x174u);
-    /* 3001db8: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x178u);
+    R170: ;/* 3001db4: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x174u);
+    R174: ;/* 3001db8: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x178u);
 L1DBC:
-    /* 3001dbc: mul   lr, r9, r1          */ lr = r9 * r1;                              cyc -= 1; CHK(0x17cu);
-    /* 3001dc0: add   lr, r0, lr, asr #23 */ lr = r0 + (uint32_t)(((int32_t)lr) >> 23); cyc -= 1; CHK(0x180u);
-    /* 3001dc4: mul   ip, sl, lr          */ ip = sl * lr;                              cyc -= 1; CHK(0x184u);
-    /* 3001dc8: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x188u);
+    R178: ;/* 3001dbc: mul   lr, r9, r1          */ lr = r9 * r1;                              cyc -= 1; CHK(0x17cu);
+    R17c: ;/* 3001dc0: add   lr, r0, lr, asr #23 */ lr = r0 + (uint32_t)(((int32_t)lr) >> 23); cyc -= 1; CHK(0x180u);
+    R180: ;/* 3001dc4: mul   ip, sl, lr          */ ip = sl * lr;                              cyc -= 1; CHK(0x184u);
+    R184: ;/* 3001dc8: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x188u);
 #ifdef M4A_SABOTAGE
     /* The RED, in the loop this variant actually runs. See the note in the mono
      * block: a saboteur on a path the game never takes proves nothing. */
     ip ^= 0x01000000u;
 #endif
-    /* 3001dcc: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x18cu);
-    /* 3001dd0: mul   ip, fp, lr          */ ip = fp * lr;                              cyc -= 1; CHK(0x190u);
-    /* 3001dd4: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x194u);
-    /* 3001dd8: add   r7, ip, r7, ror #8  */ r7 = ip + ror32(r7, 8);                    cyc -= 1; CHK(0x198u);
-    /* 3001ddc: add   r9, r9, r4          */ r9 += r4;                                  cyc -= 1; CHK(0x19cu);
-    /* 3001de0: lsrs  lr, r9, #23         */ lr = r9 >> 23; SET_LOGIC(lr); c_f = (r9 >> 22) & 1u; cyc -= 1; CHK(0x1a0u);
-    /* 3001de4: beq   L1E08               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1c4u); goto L1E08; } CHK(0x1a4u);
-    /* 3001de8: bic   r9, r9, #0x3f800000 */ r9 &= ~0x3f800000u;                        cyc -= 1; CHK(0x1a8u);
-    /* 3001dec: subs  r2, r2, lr          */ { uint32_t a = r2, d = a - lr; SET_SUB(a, lr, d); r2 = d; } cyc -= 1; CHK(0x1acu);
-    /* 3001df0: ble   L1D34               */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0f0u); goto L1D34; } CHK(0x1b0u);
-    /* 3001df4: subs  lr, lr, #1          */ { uint32_t a = lr, d = a - 1u; SET_SUB(a, 1u, d); lr = d; } cyc -= 1; CHK(0x1b4u);
-    /* 3001df8: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1;               CHK(0x1b8u);
+    R188: ;/* 3001dcc: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x18cu);
+    R18c: ;/* 3001dd0: mul   ip, fp, lr          */ ip = fp * lr;                              cyc -= 1; CHK(0x190u);
+    R190: ;/* 3001dd4: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x194u);
+    R194: ;/* 3001dd8: add   r7, ip, r7, ror #8  */ r7 = ip + ror32(r7, 8);                    cyc -= 1; CHK(0x198u);
+    R198: ;/* 3001ddc: add   r9, r9, r4          */ r9 += r4;                                  cyc -= 1; CHK(0x19cu);
+    R19c: ;/* 3001de0: lsrs  lr, r9, #23         */ lr = r9 >> 23; SET_LOGIC(lr); c_f = (r9 >> 22) & 1u; cyc -= 1; CHK(0x1a0u);
+    R1a0: ;/* 3001de4: beq   L1E08               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1c4u); goto L1E08; } CHK(0x1a4u);
+    R1a4: ;/* 3001de8: bic   r9, r9, #0x3f800000 */ r9 &= ~0x3f800000u;                        cyc -= 1; CHK(0x1a8u);
+    R1a8: ;/* 3001dec: subs  r2, r2, lr          */ { uint32_t a = r2, d = a - lr; SET_SUB(a, lr, d); r2 = d; } cyc -= 1; CHK(0x1acu);
+    R1ac: ;/* 3001df0: ble   L1D34               */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0f0u); goto L1D34; } CHK(0x1b0u);
+    R1b0: ;/* 3001df4: subs  lr, lr, #1          */ { uint32_t a = lr, d = a - 1u; SET_SUB(a, 1u, d); lr = d; } cyc -= 1; CHK(0x1b4u);
+    R1b4: ;/* 3001df8: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1;               CHK(0x1b8u);
 L1DFC:
-    /* 3001dfc: ldrsbne r0, [r3, lr]!     */ if (!z_f) { r3 += lr;
+    R1b8: ;/* 3001dfc: ldrsbne r0, [r3, lr]!     */ if (!z_f) { r3 += lr;
                                                  r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); }
                                              cyc -= 1; CHK(0x1bcu);
-    /* 3001e00: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x1c0u);
-    /* 3001e04: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x1c4u);
+    R1bc: ;/* 3001e00: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x1c0u);
+    R1c0: ;/* 3001e04: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x1c4u);
 L1E08:
-    /* 3001e08: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x1c8u);
-    /* 3001e0c: bcc   L1DBC               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x178u); goto L1DBC; } CHK(0x1ccu);
-    /* 3001e10: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x1d0u);
-    /* 3001e14: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x1d4u);
-    /* 3001e18: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x1d8u);
-    /* 3001e1c: bgt   L1DB4               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x170u); goto L1DB4; } CHK(0x1dcu);
-    /* 3001e20: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x1e0u);
-    /* 3001e24: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R1c4: ;/* 3001e08: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x1c8u);
+    R1c8: ;/* 3001e0c: bcc   L1DBC               */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x178u); goto L1DBC; } CHK(0x1ccu);
+    R1cc: ;/* 3001e10: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x1d0u);
+    R1d0: ;/* 3001e14: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x1d4u);
+    R1d4: ;/* 3001e18: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x1d8u);
+    R1d8: ;/* 3001e1c: bgt   L1DB4               */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x170u); goto L1DB4; } CHK(0x1dcu);
+    R1dc: ;/* 3001e20: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x1e0u);
+    R1e0: ;/* 3001e24: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x1e4u);
-    /* 3001e28: str   r9, [r4, #28]       */ wr_u32(&wch, r4 + 28u, r9, &cyc, 0);       cyc -= 1; CHK(0x1e8u);
+    R1e4: ;/* 3001e28: str   r9, [r4, #28]       */ wr_u32(&wch, r4 + 28u, r9, &cyc, 0);       cyc -= 1; CHK(0x1e8u);
 L1E2C:
-    /* 3001e2c: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x1ecu);
-    /* 3001e30: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x1f0u);
+    R1e8: ;/* 3001e2c: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x1ecu);
+    R1ec: ;/* 3001e30: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x1f0u);
 L1E34:
-    /* 3001e34: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
+    R1f0: ;/* 3001e34: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
 
     if (FAILED())
         return M4A_DECLINED;
@@ -825,6 +893,14 @@ static int m4a_run_v3_stereo2(m4a_state *s, const m4a_bus *bus)
     ip = s->r[12]; sp = s->r[13]; lr = s->r[14];
     n_f = s->n; z_f = s->z; c_f = s->c; v_f = s->v;
 
+    if (s->resume) {               /* validated when the block started */
+        win_init(&wch,  bus);
+        win_init(&wmix, bus);
+        win_init(&wsmp, bus);
+        win_init(&wstk, bus);
+        goto m4a_resume_at;
+    }
+
     if ((r5 >> 30) != 0u)
         return M4A_DECLINED;
     if (!writable_region(r5) || !writable_region(r4) || !writable_region(sp))
@@ -841,165 +917,192 @@ static int m4a_run_v3_stereo2(m4a_state *s, const m4a_bus *bus)
 
 #define FAILED()  (wch.failed || wmix.failed || wsmp.failed || wstk.failed)
 
-    /* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
-    /* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
-    /* 3000008: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x00cu);
-    /* 300000c: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x010u);
-    /* 3000010: lsl   fp, fp, #16         */ fp <<= 16;                                 cyc -= 1; CHK(0x014u);
-    /* 3000014: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x018u);
-    /* 3000018: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x01cu);
-    /* 300001c: beq   L140               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x140u); goto L140; } CHK(0x020u);
+    if (0) {
+m4a_resume_at:
+        switch (s->resume) {
+        case 0x004u: goto R004; case 0x008u: goto R008; case 0x00cu: goto R00c; case 0x010u: goto R010; case 0x014u: goto R014; case 0x018u: goto R018;
+        case 0x01cu: goto R01c; case 0x020u: goto R020; case 0x024u: goto R024; case 0x028u: goto R028; case 0x02cu: goto R02c; case 0x030u: goto R030;
+        case 0x034u: goto R034; case 0x038u: goto R038; case 0x03cu: goto R03c; case 0x040u: goto R040; case 0x044u: goto R044; case 0x048u: goto R048;
+        case 0x04cu: goto R04c; case 0x050u: goto R050; case 0x054u: goto R054; case 0x058u: goto R058; case 0x05cu: goto R05c; case 0x060u: goto R060;
+        case 0x064u: goto R064; case 0x068u: goto R068; case 0x06cu: goto R06c; case 0x070u: goto R070; case 0x074u: goto R074; case 0x078u: goto R078;
+        case 0x07cu: goto R07c; case 0x080u: goto R080; case 0x084u: goto R084; case 0x088u: goto R088; case 0x08cu: goto R08c; case 0x090u: goto R090;
+        case 0x094u: goto R094; case 0x098u: goto R098; case 0x09cu: goto R09c; case 0x0a0u: goto R0a0; case 0x0a4u: goto R0a4; case 0x0a8u: goto R0a8;
+        case 0x0acu: goto R0ac; case 0x0b0u: goto R0b0; case 0x0b4u: goto R0b4; case 0x0b8u: goto R0b8; case 0x0bcu: goto R0bc; case 0x0c0u: goto R0c0;
+        case 0x0c4u: goto R0c4; case 0x0c8u: goto R0c8; case 0x0ccu: goto R0cc; case 0x0d0u: goto R0d0; case 0x0d4u: goto R0d4; case 0x0d8u: goto R0d8;
+        case 0x0dcu: goto R0dc; case 0x0e0u: goto R0e0; case 0x0e4u: goto R0e4; case 0x0e8u: goto R0e8; case 0x0ecu: goto R0ec; case 0x0f0u: goto R0f0;
+        case 0x0f4u: goto R0f4; case 0x0f8u: goto R0f8; case 0x0fcu: goto R0fc; case 0x100u: goto R100; case 0x104u: goto R104; case 0x108u: goto R108;
+        case 0x10cu: goto R10c; case 0x110u: goto R110; case 0x114u: goto R114; case 0x118u: goto R118; case 0x11cu: goto R11c; case 0x120u: goto R120;
+        case 0x124u: goto R124; case 0x128u: goto R128; case 0x12cu: goto R12c; case 0x130u: goto R130; case 0x134u: goto R134; case 0x138u: goto R138;
+        case 0x13cu: goto R13c; case 0x140u: goto R140; case 0x144u: goto R144; case 0x148u: goto R148; case 0x14cu: goto R14c; case 0x150u: goto R150;
+        case 0x154u: goto R154; case 0x158u: goto R158; case 0x15cu: goto R15c; case 0x160u: goto R160; case 0x164u: goto R164; case 0x168u: goto R168;
+        case 0x16cu: goto R16c; case 0x170u: goto R170; case 0x174u: goto R174; case 0x178u: goto R178; case 0x17cu: goto R17c; case 0x180u: goto R180;
+        case 0x184u: goto R184; case 0x188u: goto R188; case 0x18cu: goto R18c; case 0x190u: goto R190; case 0x194u: goto R194; case 0x198u: goto R198;
+        case 0x19cu: goto R19c; case 0x1a0u: goto R1a0; case 0x1a4u: goto R1a4; case 0x1a8u: goto R1a8; case 0x1acu: goto R1ac; case 0x1b0u: goto R1b0;
+        case 0x1b4u: goto R1b4; case 0x1b8u: goto R1b8; case 0x1bcu: goto R1bc; case 0x1c0u: goto R1c0; case 0x1c4u: goto R1c4; case 0x1c8u: goto R1c8;
+        case 0x1ccu: goto R1cc; case 0x1d0u: goto R1d0; case 0x1d4u: goto R1d4; case 0x1d8u: goto R1d8; case 0x1dcu: goto R1dc;
+        default: return M4A_DECLINED;
+        }
+    }
+
+    R000: ;/* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
+    R004: ;/* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
+    R008: ;/* 3000008: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x00cu);
+    R00c: ;/* 300000c: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x010u);
+    R010: ;/* 3000010: lsl   fp, fp, #16         */ fp <<= 16;                                 cyc -= 1; CHK(0x014u);
+    R014: ;/* 3000014: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x018u);
+    R018: ;/* 3000018: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x01cu);
+    R01c: ;/* 300001c: beq   L140               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x140u); goto L140; } CHK(0x020u);
 
 L020:
-    /* 3000020: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x024u);
-    /* 3000024: ble   L090                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x090u); goto L090; } CHK(0x028u);
-    /* 3000028: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x02cu);
-    /* 300002c: movgt lr, #0              */ cyc -= 1; if (COND_GT()) lr = 0u;          CHK(0x030u);
-    /* 3000030: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x04cu); goto L04C; } CHK(0x034u);
-    /* 3000034: mov   lr, r8              */ lr = r8;                                   cyc -= 1; CHK(0x038u);
-    /* 3000038: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x03cu);
-    /* 300003c: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x040u);
-    /* 3000040: sub   lr, lr, r8          */ lr -= r8;                                  cyc -= 1; CHK(0x044u);
-    /* 3000044: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x048u);
-    /* 3000048: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u;                CHK(0x04cu);
+    R020: ;/* 3000020: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x024u);
+    R024: ;/* 3000024: ble   L090                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x090u); goto L090; } CHK(0x028u);
+    R028: ;/* 3000028: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x02cu);
+    R02c: ;/* 300002c: movgt lr, #0              */ cyc -= 1; if (COND_GT()) lr = 0u;          CHK(0x030u);
+    R030: ;/* 3000030: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x04cu); goto L04C; } CHK(0x034u);
+    R034: ;/* 3000034: mov   lr, r8              */ lr = r8;                                   cyc -= 1; CHK(0x038u);
+    R038: ;/* 3000038: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x03cu);
+    R03c: ;/* 300003c: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x040u);
+    R040: ;/* 3000040: sub   lr, lr, r8          */ lr -= r8;                                  cyc -= 1; CHK(0x044u);
+    R044: ;/* 3000044: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x048u);
+    R048: ;/* 3000048: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u;                CHK(0x04cu);
 
 L04C:
-    /* 300004c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x050u);
-    /* 3000050: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x054u);
+    R04c: ;/* 300004c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x050u);
+    R050: ;/* 3000050: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x054u);
 L054:
-    /* 3000054: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x058u);
-    /* 3000058: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x05cu);
-    /* 300005c: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x060u);
-    /* 3000060: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x064u);
-    /* 3000064: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x068u);
-    /* 3000068: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x06cu);
-    /* 300006c: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x070u);
-    /* 3000070: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x074u);
-    /* 3000074: bcc   L054                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x054u); goto L054; } CHK(0x078u);
-    /* 3000078: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x07cu);
-    /* 300007c: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x080u);
-    /* 3000080: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x084u);
-    /* 3000084: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x04cu); goto L04C; } CHK(0x088u);
-    /* 3000088: adds  r8, r8, lr          */ { uint32_t a = r8, d = a + lr; SET_ADD(a, lr, d); r8 = d; } cyc -= 1; CHK(0x08cu);
-    /* 300008c: beq   L1D4                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1d4u); goto L1D4; } CHK(0x090u);
+    R054: ;/* 3000054: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x058u);
+    R058: ;/* 3000058: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x05cu);
+    R05c: ;/* 300005c: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x060u);
+    R060: ;/* 3000060: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x064u);
+    R064: ;/* 3000064: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x068u);
+    R068: ;/* 3000068: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x06cu);
+    R06c: ;/* 300006c: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x070u);
+    R070: ;/* 3000070: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x074u);
+    R074: ;/* 3000074: bcc   L054                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x054u); goto L054; } CHK(0x078u);
+    R078: ;/* 3000078: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x07cu);
+    R07c: ;/* 300007c: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x080u);
+    R080: ;/* 3000080: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x084u);
+    R084: ;/* 3000084: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x04cu); goto L04C; } CHK(0x088u);
+    R088: ;/* 3000088: adds  r8, r8, lr          */ { uint32_t a = r8, d = a + lr; SET_ADD(a, lr, d); r8 = d; } cyc -= 1; CHK(0x08cu);
+    R08c: ;/* 300008c: beq   L1D4                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1d4u); goto L1D4; } CHK(0x090u);
 
 L090:
-    /* 3000090: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x094u);
-    /* 3000094: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x098u);
+    R090: ;/* 3000090: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x094u);
+    R094: ;/* 3000094: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x098u);
 L098:
-    /* 3000098: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x09cu);
-    /* 300009c: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x0a0u);
-    /* 30000a0: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0a4u);
-    /* 30000a4: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x0a8u);
-    /* 30000a8: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x0acu);
-    /* 30000ac: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0b0u);
-    /* 30000b0: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x0b4u);
-    /* 30000b4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0b8u);
-    /* 30000b8: beq   L108                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x108u); goto L108; } CHK(0x0bcu);
+    R098: ;/* 3000098: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x09cu);
+    R09c: ;/* 300009c: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x0a0u);
+    R0a0: ;/* 30000a0: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0a4u);
+    R0a4: ;/* 30000a4: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x0a8u);
+    R0a8: ;/* 30000a8: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x0acu);
+    R0ac: ;/* 30000ac: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0b0u);
+    R0b0: ;/* 30000b0: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x0b4u);
+    R0b4: ;/* 30000b4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0b8u);
+    R0b8: ;/* 30000b8: beq   L108                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x108u); goto L108; } CHK(0x0bcu);
 L0BC:
-    /* 30000bc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x0c0u);
-    /* 30000c0: bcc   L098                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x098u); goto L098; } CHK(0x0c4u);
-    /* 30000c4: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x0c8u);
-    /* 30000c8: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x0ccu);
-    /* 30000cc: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0d0u);
-    /* 30000d0: bgt   L020                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x020u); goto L020; } CHK(0x0d4u);
-    /* 30000d4: b     L1D4                */ cyc -= 2; CHK(0x1d4u); goto L1D4;
+    R0bc: ;/* 30000bc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x0c0u);
+    R0c0: ;/* 30000c0: bcc   L098                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x098u); goto L098; } CHK(0x0c4u);
+    R0c4: ;/* 30000c4: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x0c8u);
+    R0c8: ;/* 30000c8: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x0ccu);
+    R0cc: ;/* 30000cc: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0d0u);
+    R0d0: ;/* 30000d0: bgt   L020                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x020u); goto L020; } CHK(0x0d4u);
+    R0d4: ;/* 30000d4: b     L1D4                */ cyc -= 2; CHK(0x1d4u); goto L1D4;
 
 L0D8:
-    /* 30000d8: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0dcu);
-    /* 30000dc: cmp   r0, #0              */ SET_CMP0(r0);                              cyc -= 1; CHK(0x0e0u);
-    /* 30000e0: beq   L0FC                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0fcu); goto L0FC; } CHK(0x0e4u);
-    /* 30000e4: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x0e8u);
-    /* 30000e8: rsb   r9, r2, #0          */ r9 = 0u - r2;                              cyc -= 1; CHK(0x0ecu);
+    R0d8: ;/* 30000d8: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0dcu);
+    R0dc: ;/* 30000dc: cmp   r0, #0              */ SET_CMP0(r0);                              cyc -= 1; CHK(0x0e0u);
+    R0e0: ;/* 30000e0: beq   L0FC                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0fcu); goto L0FC; } CHK(0x0e4u);
+    R0e4: ;/* 30000e4: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x0e8u);
+    R0e8: ;/* 30000e8: rsb   r9, r2, #0          */ r9 = 0u - r2;                              cyc -= 1; CHK(0x0ecu);
 L0EC:
-    /* 30000ec: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x0f0u);
-    /* 30000f0: bgt   L1A4                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x1a4u); goto L1A4; } CHK(0x0f4u);
-    /* 30000f4: sub   r9, r9, r0          */ r9 -= r0;                                  cyc -= 1; CHK(0x0f8u);
-    /* 30000f8: b     L0EC                */ cyc -= 2; CHK(0x0ecu); goto L0EC;
+    R0ec: ;/* 30000ec: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x0f0u);
+    R0f0: ;/* 30000f0: bgt   L1A4                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x1a4u); goto L1A4; } CHK(0x0f4u);
+    R0f4: ;/* 30000f4: sub   r9, r9, r0          */ r9 -= r0;                                  cyc -= 1; CHK(0x0f8u);
+    R0f8: ;/* 30000f8: b     L0EC                */ cyc -= 2; CHK(0x0ecu); goto L0EC;
 
 L0FC:
-    /* 30000fc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R0fc: ;/* 30000fc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x100u);
-    /* 3000100: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x104u);
-    /* 3000104: b     L118                */ cyc -= 2; CHK(0x118u); goto L118;
+    R100: ;/* 3000100: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x104u);
+    R104: ;/* 3000104: b     L118                */ cyc -= 2; CHK(0x118u); goto L118;
 
 L108:
-    /* 3000108: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x10cu);
-    /* 300010c: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x110u);
-    /* 3000110: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x114u);
-    /* 3000114: bne   L0BC                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0bcu); goto L0BC; } CHK(0x118u);
+    R108: ;/* 3000108: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x10cu);
+    R10c: ;/* 300010c: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x110u);
+    R110: ;/* 3000110: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x114u);
+    R114: ;/* 3000114: bne   L0BC                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0bcu); goto L0BC; } CHK(0x118u);
 
 L118:
-    /* 3000118: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x11cu);
-    /* 300011c: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x120u);
-    /* 3000120: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x124u);
-    /* 3000124: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x128u);
-    /* 3000128: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x12cu);
-    /* 300012c: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x130u);
-    /* 3000130: ror   r7, r7, r0          */ r7 = ror32(r7, r0 & 0xffu);                cyc -= 1; CHK(0x134u);
-    /* 3000134: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x138u);
-    /* 3000138: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x13cu);
-    /* 300013c: b     L1DC                */ cyc -= 2; CHK(0x1dcu); goto L1DC;
+    R118: ;/* 3000118: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x11cu);
+    R11c: ;/* 300011c: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x120u);
+    R120: ;/* 3000120: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x124u);
+    R124: ;/* 3000124: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x128u);
+    R128: ;/* 3000128: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x12cu);
+    R12c: ;/* 300012c: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x130u);
+    R130: ;/* 3000130: ror   r7, r7, r0          */ r7 = ror32(r7, r0 & 0xffu);                cyc -= 1; CHK(0x134u);
+    R134: ;/* 3000134: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x138u);
+    R138: ;/* 3000138: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x13cu);
+    R13c: ;/* 300013c: b     L1DC                */ cyc -= 2; CHK(0x1dcu); goto L1DC;
 
 L140:
-    /* 3000140: push  {r4, ip}            */ sp -= 8u;
+    R140: ;/* 3000140: push  {r4, ip}            */ sp -= 8u;
                                              wr_u32(&wstk, sp, r4, &cyc, 1);
                                              wr_u32(&wstk, sp + 4u, ip, &cyc, 1);       cyc -= 1; CHK(0x144u);
-    /* 3000144: ldr   lr, [r4, #28]       */ lr = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x148u);
-    /* 3000148: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x14cu);
-    /* 300014c: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x150u);
-    /* 3000150: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x154u);
-    /* 3000154: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x158u);
-    /* 3000158: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x15cu);
+    R144: ;/* 3000144: ldr   lr, [r4, #28]       */ lr = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x148u);
+    R148: ;/* 3000148: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x14cu);
+    R14c: ;/* 300014c: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x150u);
+    R150: ;/* 3000150: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x154u);
+    R154: ;/* 3000154: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x158u);
+    R158: ;/* 3000158: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x15cu);
 
 L15C:
-    /* 300015c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x160u);
-    /* 3000160: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x164u);
+    R15c: ;/* 300015c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x160u);
+    R160: ;/* 3000160: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x164u);
 L164:
-    /* 3000164: mul   r9, lr, r1          */ r9 = lr * r1;                              cyc -= 1; CHK(0x168u);
-    /* 3000168: add   r9, r0, r9, asr #23 */ r9 = r0 + (uint32_t)(((int32_t)r9) >> 23); cyc -= 1; CHK(0x16cu);
-    /* 300016c: mul   ip, sl, r9          */ ip = sl * r9;                              cyc -= 1; CHK(0x170u);
-    /* 3000170: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;
+    R164: ;/* 3000164: mul   r9, lr, r1          */ r9 = lr * r1;                              cyc -= 1; CHK(0x168u);
+    R168: ;/* 3000168: add   r9, r0, r9, asr #23 */ r9 = r0 + (uint32_t)(((int32_t)r9) >> 23); cyc -= 1; CHK(0x16cu);
+    R16c: ;/* 300016c: mul   ip, sl, r9          */ ip = sl * r9;                              cyc -= 1; CHK(0x170u);
+    R170: ;/* 3000170: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;
 #ifdef M4A_SABOTAGE
     ip ^= 0x01000000u;   /* the RED, on the path this variant actually runs */
 #endif
                                                                                         cyc -= 1; CHK(0x174u);
-    /* 3000174: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x178u);
-    /* 3000178: mul   ip, fp, r9          */ ip = fp * r9;                              cyc -= 1; CHK(0x17cu);
-    /* 300017c: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x180u);
-    /* 3000180: add   r7, ip, r7, ror #8  */ r7 = ip + ror32(r7, 8);                    cyc -= 1; CHK(0x184u);
-    /* 3000184: add   lr, lr, r4          */ lr += r4;                                  cyc -= 1; CHK(0x188u);
-    /* 3000188: lsrs  r9, lr, #23         */ r9 = lr >> 23; SET_LOGIC(r9); c_f = (lr >> 22) & 1u; cyc -= 1; CHK(0x18cu);
-    /* 300018c: beq   L1B0                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1b0u); goto L1B0; } CHK(0x190u);
-    /* 3000190: bic   lr, lr, #0x3f800000 */ lr &= ~0x3f800000u;                        cyc -= 1; CHK(0x194u);
-    /* 3000194: subs  r2, r2, r9          */ { uint32_t a = r2, d = a - r9; SET_SUB(a, r9, d); r2 = d; } cyc -= 1; CHK(0x198u);
-    /* 3000198: ble   L0D8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d8u); goto L0D8; } CHK(0x19cu);
-    /* 300019c: subs  r9, r9, #1          */ { uint32_t a = r9, d = a - 1u; SET_SUB(a, 1u, d); r9 = d; } cyc -= 1; CHK(0x1a0u);
-    /* 30001a0: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1;               CHK(0x1a4u);
+    R174: ;/* 3000174: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x178u);
+    R178: ;/* 3000178: mul   ip, fp, r9          */ ip = fp * r9;                              cyc -= 1; CHK(0x17cu);
+    R17c: ;/* 300017c: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x180u);
+    R180: ;/* 3000180: add   r7, ip, r7, ror #8  */ r7 = ip + ror32(r7, 8);                    cyc -= 1; CHK(0x184u);
+    R184: ;/* 3000184: add   lr, lr, r4          */ lr += r4;                                  cyc -= 1; CHK(0x188u);
+    R188: ;/* 3000188: lsrs  r9, lr, #23         */ r9 = lr >> 23; SET_LOGIC(r9); c_f = (lr >> 22) & 1u; cyc -= 1; CHK(0x18cu);
+    R18c: ;/* 300018c: beq   L1B0                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1b0u); goto L1B0; } CHK(0x190u);
+    R190: ;/* 3000190: bic   lr, lr, #0x3f800000 */ lr &= ~0x3f800000u;                        cyc -= 1; CHK(0x194u);
+    R194: ;/* 3000194: subs  r2, r2, r9          */ { uint32_t a = r2, d = a - r9; SET_SUB(a, r9, d); r2 = d; } cyc -= 1; CHK(0x198u);
+    R198: ;/* 3000198: ble   L0D8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d8u); goto L0D8; } CHK(0x19cu);
+    R19c: ;/* 300019c: subs  r9, r9, #1          */ { uint32_t a = r9, d = a - 1u; SET_SUB(a, 1u, d); r9 = d; } cyc -= 1; CHK(0x1a0u);
+    R1a0: ;/* 30001a0: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1;               CHK(0x1a4u);
 L1A4:
-    /* 30001a4: ldrsbne r0, [r3, r9]!     */ if (!z_f) { r3 += r9;
+    R1a4: ;/* 30001a4: ldrsbne r0, [r3, r9]!     */ if (!z_f) { r3 += r9;
                                                  r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); }
                                              cyc -= 1; CHK(0x1a8u);
-    /* 30001a8: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x1acu);
-    /* 30001ac: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x1b0u);
+    R1a8: ;/* 30001a8: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x1acu);
+    R1ac: ;/* 30001ac: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x1b0u);
 L1B0:
-    /* 30001b0: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x1b4u);
-    /* 30001b4: bcc   L164                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x164u); goto L164; } CHK(0x1b8u);
-    /* 30001b8: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x1bcu);
-    /* 30001bc: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x1c0u);
-    /* 30001c0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x1c4u);
-    /* 30001c4: bgt   L15C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x15cu); goto L15C; } CHK(0x1c8u);
-    /* 30001c8: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x1ccu);
-    /* 30001cc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R1b0: ;/* 30001b0: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x1b4u);
+    R1b4: ;/* 30001b4: bcc   L164                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x164u); goto L164; } CHK(0x1b8u);
+    R1b8: ;/* 30001b8: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x1bcu);
+    R1bc: ;/* 30001bc: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x1c0u);
+    R1c0: ;/* 30001c0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x1c4u);
+    R1c4: ;/* 30001c4: bgt   L15C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x15cu); goto L15C; } CHK(0x1c8u);
+    R1c8: ;/* 30001c8: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x1ccu);
+    R1cc: ;/* 30001cc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x1d0u);
-    /* 30001d0: str   lr, [r4, #28]       */ wr_u32(&wch, r4 + 28u, lr, &cyc, 0);       cyc -= 1; CHK(0x1d4u);
+    R1d0: ;/* 30001d0: str   lr, [r4, #28]       */ wr_u32(&wch, r4 + 28u, lr, &cyc, 0);       cyc -= 1; CHK(0x1d4u);
 L1D4:
-    /* 30001d4: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x1d8u);
-    /* 30001d8: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x1dcu);
+    R1d4: ;/* 30001d4: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x1d8u);
+    R1d8: ;/* 30001d8: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x1dcu);
 L1DC:
-    /* 30001dc: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
+    R1dc: ;/* 30001dc: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
 
     if (FAILED())
         return M4A_DECLINED;
@@ -1086,6 +1189,14 @@ static int m4a_run_v4_stereo3(m4a_state *s, const m4a_bus *bus)
     ip = s->r[12]; sp = s->r[13]; lr = s->r[14];
     n_f = s->n; z_f = s->z; c_f = s->c; v_f = s->v;
 
+    if (s->resume) {               /* validated when the block started */
+        win_init(&wch,  bus);
+        win_init(&wmix, bus);
+        win_init(&wsmp, bus);
+        win_init(&wstk, bus);
+        goto m4a_resume_at;
+    }
+
     if ((r5 >> 30) != 0u)
         return M4A_DECLINED;
     if (!writable_region(r5) || !writable_region(r4) || !writable_region(sp))
@@ -1102,165 +1213,192 @@ static int m4a_run_v4_stereo3(m4a_state *s, const m4a_bus *bus)
 
 #define FAILED()  (wch.failed || wmix.failed || wsmp.failed || wstk.failed)
 
-    /* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
-    /* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
-    /* 3000008: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x00cu);
-    /* 300000c: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x010u);
-    /* 3000010: lsl   fp, fp, #16         */ fp <<= 16;                                 cyc -= 1; CHK(0x014u);
-    /* 3000014: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x018u);
-    /* 3000018: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x01cu);
-    /* 300001c: beq   L140               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x140u); goto L140; } CHK(0x020u);
+    if (0) {
+m4a_resume_at:
+        switch (s->resume) {
+        case 0x004u: goto R004; case 0x008u: goto R008; case 0x00cu: goto R00c; case 0x010u: goto R010; case 0x014u: goto R014; case 0x018u: goto R018;
+        case 0x01cu: goto R01c; case 0x020u: goto R020; case 0x024u: goto R024; case 0x028u: goto R028; case 0x02cu: goto R02c; case 0x030u: goto R030;
+        case 0x034u: goto R034; case 0x038u: goto R038; case 0x03cu: goto R03c; case 0x040u: goto R040; case 0x044u: goto R044; case 0x048u: goto R048;
+        case 0x04cu: goto R04c; case 0x050u: goto R050; case 0x054u: goto R054; case 0x058u: goto R058; case 0x05cu: goto R05c; case 0x060u: goto R060;
+        case 0x064u: goto R064; case 0x068u: goto R068; case 0x06cu: goto R06c; case 0x070u: goto R070; case 0x074u: goto R074; case 0x078u: goto R078;
+        case 0x07cu: goto R07c; case 0x080u: goto R080; case 0x084u: goto R084; case 0x088u: goto R088; case 0x08cu: goto R08c; case 0x090u: goto R090;
+        case 0x094u: goto R094; case 0x098u: goto R098; case 0x09cu: goto R09c; case 0x0a0u: goto R0a0; case 0x0a4u: goto R0a4; case 0x0a8u: goto R0a8;
+        case 0x0acu: goto R0ac; case 0x0b0u: goto R0b0; case 0x0b4u: goto R0b4; case 0x0b8u: goto R0b8; case 0x0bcu: goto R0bc; case 0x0c0u: goto R0c0;
+        case 0x0c4u: goto R0c4; case 0x0c8u: goto R0c8; case 0x0ccu: goto R0cc; case 0x0d0u: goto R0d0; case 0x0d4u: goto R0d4; case 0x0d8u: goto R0d8;
+        case 0x0dcu: goto R0dc; case 0x0e0u: goto R0e0; case 0x0e4u: goto R0e4; case 0x0e8u: goto R0e8; case 0x0ecu: goto R0ec; case 0x0f0u: goto R0f0;
+        case 0x0f4u: goto R0f4; case 0x0f8u: goto R0f8; case 0x0fcu: goto R0fc; case 0x100u: goto R100; case 0x104u: goto R104; case 0x108u: goto R108;
+        case 0x10cu: goto R10c; case 0x110u: goto R110; case 0x114u: goto R114; case 0x118u: goto R118; case 0x11cu: goto R11c; case 0x120u: goto R120;
+        case 0x124u: goto R124; case 0x128u: goto R128; case 0x12cu: goto R12c; case 0x130u: goto R130; case 0x134u: goto R134; case 0x138u: goto R138;
+        case 0x13cu: goto R13c; case 0x140u: goto R140; case 0x144u: goto R144; case 0x148u: goto R148; case 0x14cu: goto R14c; case 0x150u: goto R150;
+        case 0x154u: goto R154; case 0x158u: goto R158; case 0x15cu: goto R15c; case 0x160u: goto R160; case 0x164u: goto R164; case 0x168u: goto R168;
+        case 0x16cu: goto R16c; case 0x170u: goto R170; case 0x174u: goto R174; case 0x178u: goto R178; case 0x17cu: goto R17c; case 0x180u: goto R180;
+        case 0x184u: goto R184; case 0x188u: goto R188; case 0x18cu: goto R18c; case 0x190u: goto R190; case 0x194u: goto R194; case 0x198u: goto R198;
+        case 0x19cu: goto R19c; case 0x1a0u: goto R1a0; case 0x1a4u: goto R1a4; case 0x1a8u: goto R1a8; case 0x1acu: goto R1ac; case 0x1b0u: goto R1b0;
+        case 0x1b4u: goto R1b4; case 0x1b8u: goto R1b8; case 0x1bcu: goto R1bc; case 0x1c0u: goto R1c0; case 0x1c4u: goto R1c4; case 0x1c8u: goto R1c8;
+        case 0x1ccu: goto R1cc; case 0x1d0u: goto R1d0; case 0x1d4u: goto R1d4; case 0x1d8u: goto R1d8; case 0x1dcu: goto R1dc;
+        default: return M4A_DECLINED;
+        }
+    }
+
+    R000: ;/* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
+    R004: ;/* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
+    R008: ;/* 3000008: lsl   sl, sl, #16         */ sl <<= 16;                                 cyc -= 1; CHK(0x00cu);
+    R00c: ;/* 300000c: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x010u);
+    R010: ;/* 3000010: lsl   fp, fp, #16         */ fp <<= 16;                                 cyc -= 1; CHK(0x014u);
+    R014: ;/* 3000014: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x018u);
+    R018: ;/* 3000018: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x01cu);
+    R01c: ;/* 300001c: beq   L140               */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x140u); goto L140; } CHK(0x020u);
 
 L020:
-    /* 3000020: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x024u);
-    /* 3000024: ble   L090                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x090u); goto L090; } CHK(0x028u);
-    /* 3000028: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x02cu);
-    /* 300002c: movgt lr, #0              */ cyc -= 1; if (COND_GT()) lr = 0u;          CHK(0x030u);
-    /* 3000030: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x04cu); goto L04C; } CHK(0x034u);
-    /* 3000034: mov   lr, r8              */ lr = r8;                                   cyc -= 1; CHK(0x038u);
-    /* 3000038: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x03cu);
-    /* 300003c: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x040u);
-    /* 3000040: sub   lr, lr, r8          */ lr -= r8;                                  cyc -= 1; CHK(0x044u);
-    /* 3000044: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x048u);
-    /* 3000048: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u;                CHK(0x04cu);
+    R020: ;/* 3000020: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x024u);
+    R024: ;/* 3000024: ble   L090                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x090u); goto L090; } CHK(0x028u);
+    R028: ;/* 3000028: subs  r2, r2, r8          */ { uint32_t a = r2, d = a - r8; SET_SUB(a, r8, d); r2 = d; } cyc -= 1; CHK(0x02cu);
+    R02c: ;/* 300002c: movgt lr, #0              */ cyc -= 1; if (COND_GT()) lr = 0u;          CHK(0x030u);
+    R030: ;/* 3000030: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; CHK(0x04cu); goto L04C; } CHK(0x034u);
+    R034: ;/* 3000034: mov   lr, r8              */ lr = r8;                                   cyc -= 1; CHK(0x038u);
+    R038: ;/* 3000038: add   r2, r2, r8          */ r2 += r8;                                  cyc -= 1; CHK(0x03cu);
+    R03c: ;/* 300003c: sub   r8, r2, #4          */ r8 = r2 - 4u;                              cyc -= 1; CHK(0x040u);
+    R040: ;/* 3000040: sub   lr, lr, r8          */ lr -= r8;                                  cyc -= 1; CHK(0x044u);
+    R044: ;/* 3000044: ands  r2, r2, #3          */ r2 &= 3u; SET_LOGIC(r2);                   cyc -= 1; CHK(0x048u);
+    R048: ;/* 3000048: moveq r2, #4              */ cyc -= 1; if (z_f) r2 = 4u;                CHK(0x04cu);
 
 L04C:
-    /* 300004c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x050u);
-    /* 3000050: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x054u);
+    R04c: ;/* 300004c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x050u);
+    R050: ;/* 3000050: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x054u);
 L054:
-    /* 3000054: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x058u);
-    /* 3000058: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x05cu);
-    /* 300005c: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x060u);
-    /* 3000060: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x064u);
-    /* 3000064: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x068u);
-    /* 3000068: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x06cu);
-    /* 300006c: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x070u);
-    /* 3000070: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x074u);
-    /* 3000074: bcc   L054                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x054u); goto L054; } CHK(0x078u);
-    /* 3000078: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x07cu);
-    /* 300007c: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x080u);
-    /* 3000080: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x084u);
-    /* 3000084: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x04cu); goto L04C; } CHK(0x088u);
-    /* 3000088: adds  r8, r8, lr          */ { uint32_t a = r8, d = a + lr; SET_ADD(a, lr, d); r8 = d; } cyc -= 1; CHK(0x08cu);
-    /* 300008c: beq   L1D4                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1d4u); goto L1D4; } CHK(0x090u);
+    R054: ;/* 3000054: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x058u);
+    R058: ;/* 3000058: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x05cu);
+    R05c: ;/* 300005c: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x060u);
+    R060: ;/* 3000060: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x064u);
+    R064: ;/* 3000064: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x068u);
+    R068: ;/* 3000068: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x06cu);
+    R06c: ;/* 300006c: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x070u);
+    R070: ;/* 3000070: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x074u);
+    R074: ;/* 3000074: bcc   L054                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x054u); goto L054; } CHK(0x078u);
+    R078: ;/* 3000078: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x07cu);
+    R07c: ;/* 300007c: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x080u);
+    R080: ;/* 3000080: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x084u);
+    R084: ;/* 3000084: bgt   L04C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x04cu); goto L04C; } CHK(0x088u);
+    R088: ;/* 3000088: adds  r8, r8, lr          */ { uint32_t a = r8, d = a + lr; SET_ADD(a, lr, d); r8 = d; } cyc -= 1; CHK(0x08cu);
+    R08c: ;/* 300008c: beq   L1D4                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1d4u); goto L1D4; } CHK(0x090u);
 
 L090:
-    /* 3000090: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x094u);
-    /* 3000094: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x098u);
+    R090: ;/* 3000090: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x094u);
+    R094: ;/* 3000094: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x098u);
 L098:
-    /* 3000098: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x09cu);
-    /* 300009c: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x0a0u);
-    /* 30000a0: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0a4u);
-    /* 30000a4: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x0a8u);
-    /* 30000a8: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x0acu);
-    /* 30000ac: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0b0u);
-    /* 30000b0: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x0b4u);
-    /* 30000b4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0b8u);
-    /* 30000b8: beq   L108                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x108u); goto L108; } CHK(0x0bcu);
+    R098: ;/* 3000098: ldrsb r0, [r3], #1        */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x09cu);
+    R09c: ;/* 300009c: mul   r1, sl, r0          */ r1 = sl * r0;                              cyc -= 1; CHK(0x0a0u);
+    R0a0: ;/* 30000a0: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0a4u);
+    R0a4: ;/* 30000a4: add   r6, r1, r6, ror #8  */ r6 = r1 + ror32(r6, 8);                    cyc -= 1; CHK(0x0a8u);
+    R0a8: ;/* 30000a8: mul   r1, fp, r0          */ r1 = fp * r0;                              cyc -= 1; CHK(0x0acu);
+    R0ac: ;/* 30000ac: bic   r1, r1, #0xff0000   */ r1 &= ~0x00ff0000u;                        cyc -= 1; CHK(0x0b0u);
+    R0b0: ;/* 30000b0: add   r7, r1, r7, ror #8  */ r7 = r1 + ror32(r7, 8);                    cyc -= 1; CHK(0x0b4u);
+    R0b4: ;/* 30000b4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0b8u);
+    R0b8: ;/* 30000b8: beq   L108                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x108u); goto L108; } CHK(0x0bcu);
 L0BC:
-    /* 30000bc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x0c0u);
-    /* 30000c0: bcc   L098                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x098u); goto L098; } CHK(0x0c4u);
-    /* 30000c4: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x0c8u);
-    /* 30000c8: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x0ccu);
-    /* 30000cc: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0d0u);
-    /* 30000d0: bgt   L020                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x020u); goto L020; } CHK(0x0d4u);
-    /* 30000d4: b     L1D4                */ cyc -= 2; CHK(0x1d4u); goto L1D4;
+    R0bc: ;/* 30000bc: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x0c0u);
+    R0c0: ;/* 30000c0: bcc   L098                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x098u); goto L098; } CHK(0x0c4u);
+    R0c4: ;/* 30000c4: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x0c8u);
+    R0c8: ;/* 30000c8: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x0ccu);
+    R0cc: ;/* 30000cc: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x0d0u);
+    R0d0: ;/* 30000d0: bgt   L020                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x020u); goto L020; } CHK(0x0d4u);
+    R0d4: ;/* 30000d4: b     L1D4                */ cyc -= 2; CHK(0x1d4u); goto L1D4;
 
 L0D8:
-    /* 30000d8: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0dcu);
-    /* 30000dc: cmp   r0, #0              */ SET_CMP0(r0);                              cyc -= 1; CHK(0x0e0u);
-    /* 30000e0: beq   L0FC                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0fcu); goto L0FC; } CHK(0x0e4u);
-    /* 30000e4: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x0e8u);
-    /* 30000e8: rsb   r9, r2, #0          */ r9 = 0u - r2;                              cyc -= 1; CHK(0x0ecu);
+    R0d8: ;/* 30000d8: ldr   r0, [sp, #24]       */ r0 = rd_u32(&wstk, sp + 24u, &cyc, 0);     cyc -= 1; CHK(0x0dcu);
+    R0dc: ;/* 30000dc: cmp   r0, #0              */ SET_CMP0(r0);                              cyc -= 1; CHK(0x0e0u);
+    R0e0: ;/* 30000e0: beq   L0FC                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x0fcu); goto L0FC; } CHK(0x0e4u);
+    R0e4: ;/* 30000e4: ldr   r3, [sp, #20]       */ r3 = rd_u32(&wstk, sp + 20u, &cyc, 0);     cyc -= 1; CHK(0x0e8u);
+    R0e8: ;/* 30000e8: rsb   r9, r2, #0          */ r9 = 0u - r2;                              cyc -= 1; CHK(0x0ecu);
 L0EC:
-    /* 30000ec: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x0f0u);
-    /* 30000f0: bgt   L1A4                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x1a4u); goto L1A4; } CHK(0x0f4u);
-    /* 30000f4: sub   r9, r9, r0          */ r9 -= r0;                                  cyc -= 1; CHK(0x0f8u);
-    /* 30000f8: b     L0EC                */ cyc -= 2; CHK(0x0ecu); goto L0EC;
+    R0ec: ;/* 30000ec: adds  r2, r0, r2          */ { uint32_t a = r0, d = a + r2; SET_ADD(a, r2, d); r2 = d; } cyc -= 1; CHK(0x0f0u);
+    R0f0: ;/* 30000f0: bgt   L1A4                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x1a4u); goto L1A4; } CHK(0x0f4u);
+    R0f4: ;/* 30000f4: sub   r9, r9, r0          */ r9 -= r0;                                  cyc -= 1; CHK(0x0f8u);
+    R0f8: ;/* 30000f8: b     L0EC                */ cyc -= 2; CHK(0x0ecu); goto L0EC;
 
 L0FC:
-    /* 30000fc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R0fc: ;/* 30000fc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x100u);
-    /* 3000100: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x104u);
-    /* 3000104: b     L118                */ cyc -= 2; CHK(0x118u); goto L118;
+    R100: ;/* 3000100: mov   r2, #0              */ r2 = 0u;                                   cyc -= 1; CHK(0x104u);
+    R104: ;/* 3000104: b     L118                */ cyc -= 2; CHK(0x118u); goto L118;
 
 L108:
-    /* 3000108: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x10cu);
-    /* 300010c: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x110u);
-    /* 3000110: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x114u);
-    /* 3000114: bne   L0BC                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0bcu); goto L0BC; } CHK(0x118u);
+    R108: ;/* 3000108: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x10cu);
+    R10c: ;/* 300010c: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x110u);
+    R110: ;/* 3000110: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x114u);
+    R114: ;/* 3000114: bne   L0BC                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0bcu); goto L0BC; } CHK(0x118u);
 
 L118:
-    /* 3000118: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x11cu);
-    /* 300011c: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x120u);
-    /* 3000120: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x124u);
-    /* 3000124: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x128u);
-    /* 3000128: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x12cu);
-    /* 300012c: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x130u);
-    /* 3000130: ror   r7, r7, r0          */ r7 = ror32(r7, r0 & 0xffu);                cyc -= 1; CHK(0x134u);
-    /* 3000134: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x138u);
-    /* 3000138: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x13cu);
-    /* 300013c: b     L1DC                */ cyc -= 2; CHK(0x1dcu); goto L1DC;
+    R118: ;/* 3000118: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x11cu);
+    R11c: ;/* 300011c: lsr   r0, r5, #30         */ r0 = r5 >> 30;                             cyc -= 1; CHK(0x120u);
+    R120: ;/* 3000120: bic   r5, r5, #0xc0000000 */ r5 &= ~0xc0000000u;                        cyc -= 1; CHK(0x124u);
+    R124: ;/* 3000124: rsb   r0, r0, #3          */ r0 = 3u - r0;                              cyc -= 1; CHK(0x128u);
+    R128: ;/* 3000128: lsl   r0, r0, #3          */ r0 <<= 3;                                  cyc -= 1; CHK(0x12cu);
+    R12c: ;/* 300012c: ror   r6, r6, r0          */ r6 = ror32(r6, r0 & 0xffu);                cyc -= 1; CHK(0x130u);
+    R130: ;/* 3000130: ror   r7, r7, r0          */ r7 = ror32(r7, r0 & 0xffu);                cyc -= 1; CHK(0x134u);
+    R134: ;/* 3000134: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x138u);
+    R138: ;/* 3000138: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x13cu);
+    R13c: ;/* 300013c: b     L1DC                */ cyc -= 2; CHK(0x1dcu); goto L1DC;
 
 L140:
-    /* 3000140: push  {r4, ip}            */ sp -= 8u;
+    R140: ;/* 3000140: push  {r4, ip}            */ sp -= 8u;
                                              wr_u32(&wstk, sp, r4, &cyc, 1);
                                              wr_u32(&wstk, sp + 4u, ip, &cyc, 1);       cyc -= 1; CHK(0x144u);
-    /* 3000144: ldr   lr, [r4, #28]       */ lr = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x148u);
-    /* 3000148: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x14cu);
-    /* 300014c: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x150u);
-    /* 3000150: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x154u);
-    /* 3000154: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x158u);
-    /* 3000158: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x15cu);
+    R144: ;/* 3000144: ldr   lr, [r4, #28]       */ lr = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x148u);
+    R148: ;/* 3000148: ldr   r1, [r4, #32]       */ r1 = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x14cu);
+    R14c: ;/* 300014c: mul   r4, ip, r1          */ r4 = ip * r1;                              cyc -= 1; CHK(0x150u);
+    R150: ;/* 3000150: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x154u);
+    R154: ;/* 3000154: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x158u);
+    R158: ;/* 3000158: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x15cu);
 
 L15C:
-    /* 300015c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x160u);
-    /* 3000160: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x164u);
+    R15c: ;/* 300015c: ldr   r6, [r5]            */ r6 = rd_u32(&wmix, r5, &cyc, 0);           cyc -= 1; CHK(0x160u);
+    R160: ;/* 3000160: ldr   r7, [r5, #1584]     */ r7 = rd_u32(&wmix, r5 + 0x630u, &cyc, 0);  cyc -= 1; CHK(0x164u);
 L164:
-    /* 3000164: mul   r9, lr, r1          */ r9 = lr * r1;                              cyc -= 1; CHK(0x168u);
-    /* 3000168: add   r9, r0, r9, asr #23 */ r9 = r0 + (uint32_t)(((int32_t)r9) >> 23); cyc -= 1; CHK(0x16cu);
-    /* 300016c: mul   ip, sl, r9          */ ip = sl * r9;                              cyc -= 1; CHK(0x170u);
-    /* 3000170: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;
+    R164: ;/* 3000164: mul   r9, lr, r1          */ r9 = lr * r1;                              cyc -= 1; CHK(0x168u);
+    R168: ;/* 3000168: add   r9, r0, r9, asr #23 */ r9 = r0 + (uint32_t)(((int32_t)r9) >> 23); cyc -= 1; CHK(0x16cu);
+    R16c: ;/* 300016c: mul   ip, sl, r9          */ ip = sl * r9;                              cyc -= 1; CHK(0x170u);
+    R170: ;/* 3000170: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;
 #ifdef M4A_SABOTAGE
     ip ^= 0x01000000u;   /* the RED, on the path this variant actually runs */
 #endif
                                                                                         cyc -= 1; CHK(0x174u);
-    /* 3000174: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x178u);
-    /* 3000178: mul   ip, fp, r9          */ ip = fp * r9;                              cyc -= 1; CHK(0x17cu);
-    /* 300017c: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x180u);
-    /* 3000180: add   r7, ip, r7, ror #8  */ r7 = ip + ror32(r7, 8);                    cyc -= 1; CHK(0x184u);
-    /* 3000184: add   lr, lr, r4          */ lr += r4;                                  cyc -= 1; CHK(0x188u);
-    /* 3000188: lsrs  r9, lr, #23         */ r9 = lr >> 23; SET_LOGIC(r9); c_f = (lr >> 22) & 1u; cyc -= 1; CHK(0x18cu);
-    /* 300018c: beq   L1B0                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1b0u); goto L1B0; } CHK(0x190u);
-    /* 3000190: bic   lr, lr, #0x3f800000 */ lr &= ~0x3f800000u;                        cyc -= 1; CHK(0x194u);
-    /* 3000194: subs  r2, r2, r9          */ { uint32_t a = r2, d = a - r9; SET_SUB(a, r9, d); r2 = d; } cyc -= 1; CHK(0x198u);
-    /* 3000198: ble   L0D8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d8u); goto L0D8; } CHK(0x19cu);
-    /* 300019c: subs  r9, r9, #1          */ { uint32_t a = r9, d = a - 1u; SET_SUB(a, 1u, d); r9 = d; } cyc -= 1; CHK(0x1a0u);
-    /* 30001a0: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1;               CHK(0x1a4u);
+    R174: ;/* 3000174: add   r6, ip, r6, ror #8  */ r6 = ip + ror32(r6, 8);                    cyc -= 1; CHK(0x178u);
+    R178: ;/* 3000178: mul   ip, fp, r9          */ ip = fp * r9;                              cyc -= 1; CHK(0x17cu);
+    R17c: ;/* 300017c: bic   ip, ip, #0xff0000   */ ip &= ~0x00ff0000u;                        cyc -= 1; CHK(0x180u);
+    R180: ;/* 3000180: add   r7, ip, r7, ror #8  */ r7 = ip + ror32(r7, 8);                    cyc -= 1; CHK(0x184u);
+    R184: ;/* 3000184: add   lr, lr, r4          */ lr += r4;                                  cyc -= 1; CHK(0x188u);
+    R188: ;/* 3000188: lsrs  r9, lr, #23         */ r9 = lr >> 23; SET_LOGIC(r9); c_f = (lr >> 22) & 1u; cyc -= 1; CHK(0x18cu);
+    R18c: ;/* 300018c: beq   L1B0                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x1b0u); goto L1B0; } CHK(0x190u);
+    R190: ;/* 3000190: bic   lr, lr, #0x3f800000 */ lr &= ~0x3f800000u;                        cyc -= 1; CHK(0x194u);
+    R194: ;/* 3000194: subs  r2, r2, r9          */ { uint32_t a = r2, d = a - r9; SET_SUB(a, r9, d); r2 = d; } cyc -= 1; CHK(0x198u);
+    R198: ;/* 3000198: ble   L0D8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d8u); goto L0D8; } CHK(0x19cu);
+    R19c: ;/* 300019c: subs  r9, r9, #1          */ { uint32_t a = r9, d = a - 1u; SET_SUB(a, 1u, d); r9 = d; } cyc -= 1; CHK(0x1a0u);
+    R1a0: ;/* 30001a0: addeq r0, r0, r1          */ cyc -= 1; if (z_f) r0 += r1;               CHK(0x1a4u);
 L1A4:
-    /* 30001a4: ldrsbne r0, [r3, r9]!     */ if (!z_f) { r3 += r9;
+    R1a4: ;/* 30001a4: ldrsbne r0, [r3, r9]!     */ if (!z_f) { r3 += r9;
                                                  r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc); }
                                              cyc -= 1; CHK(0x1a8u);
-    /* 30001a8: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x1acu);
-    /* 30001ac: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x1b0u);
+    R1a8: ;/* 30001a8: ldrsb r1, [r3, #1]!       */ r3 += 1u; r1 = (uint32_t)rd_s8(&wsmp, r3, &cyc); cyc -= 1; CHK(0x1acu);
+    R1ac: ;/* 30001ac: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x1b0u);
 L1B0:
-    /* 30001b0: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x1b4u);
-    /* 30001b4: bcc   L164                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x164u); goto L164; } CHK(0x1b8u);
-    /* 30001b8: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x1bcu);
-    /* 30001bc: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x1c0u);
-    /* 30001c0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x1c4u);
-    /* 30001c4: bgt   L15C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x15cu); goto L15C; } CHK(0x1c8u);
-    /* 30001c8: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x1ccu);
-    /* 30001cc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
+    R1b0: ;/* 30001b0: adds  r5, r5, #0x40000000 */ { uint32_t a = r5, d = a + 0x40000000u; SET_ADD(a, 0x40000000u, d); r5 = d; } cyc -= 1; CHK(0x1b4u);
+    R1b4: ;/* 30001b4: bcc   L164                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x164u); goto L164; } CHK(0x1b8u);
+    R1b8: ;/* 30001b8: str   r7, [r5, #1584]     */ wr_u32(&wmix, r5 + 0x630u, r7, &cyc, 0);   cyc -= 1; CHK(0x1bcu);
+    R1bc: ;/* 30001bc: str   r6, [r5], #4        */ wr_u32(&wmix, r5, r6, &cyc, 0); r5 += 4u;  cyc -= 1; CHK(0x1c0u);
+    R1c0: ;/* 30001c0: subs  r8, r8, #4          */ { uint32_t a = r8, d = a - 4u; SET_SUB(a, 4u, d); r8 = d; } cyc -= 1; CHK(0x1c4u);
+    R1c4: ;/* 30001c4: bgt   L15C                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x15cu); goto L15C; } CHK(0x1c8u);
+    R1c8: ;/* 30001c8: sub   r3, r3, #1          */ r3 -= 1u;                                  cyc -= 1; CHK(0x1ccu);
+    R1cc: ;/* 30001cc: pop   {r4, ip}            */ r4 = rd_u32(&wstk, sp, &cyc, 1);
                                              ip = rd_u32(&wstk, sp + 4u, &cyc, 1);
                                              sp += 8u;                                  cyc -= 1; CHK(0x1d0u);
-    /* 30001d0: str   lr, [r4, #28]       */ wr_u32(&wch, r4 + 28u, lr, &cyc, 0);       cyc -= 1; CHK(0x1d4u);
+    R1d0: ;/* 30001d0: str   lr, [r4, #28]       */ wr_u32(&wch, r4 + 28u, lr, &cyc, 0);       cyc -= 1; CHK(0x1d4u);
 L1D4:
-    /* 30001d4: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x1d8u);
-    /* 30001d8: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x1dcu);
+    R1d4: ;/* 30001d4: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x1d8u);
+    R1d8: ;/* 30001d8: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x1dcu);
 L1DC:
-    /* 30001dc: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
+    R1dc: ;/* 30001dc: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
 
     if (FAILED())
         return M4A_DECLINED;
@@ -1339,6 +1477,14 @@ static int m4a_run_v5_bytes(m4a_state *s, const m4a_bus *bus)
     ip = s->r[12]; sp = s->r[13]; lr = s->r[14];
     n_f = s->n; z_f = s->z; c_f = s->c; v_f = s->v;
 
+    if (s->resume) {               /* validated when the block started */
+        win_init(&wch,  bus);
+        win_init(&wmix, bus);
+        win_init(&wsmp, bus);
+        win_init(&wstk, bus);
+        goto m4a_resume_at;
+    }
+
     if (!writable_region(r5) || !writable_region(r4) || !writable_region(sp))
         return M4A_DECLINED;
 
@@ -1356,108 +1502,129 @@ static int m4a_run_v5_bytes(m4a_state *s, const m4a_bus *bus)
 
 #define FAILED()  (wch.failed || wmix.failed || wsmp.failed || wstk.failed)
 
-    /* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
-    /* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
-    /* 3000008: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x00cu);
-    /* 300000c: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x010u);
-    /* 3000010: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x014u);
-    /* 3000014: beq   L068                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x068u); goto L068; } CHK(0x018u);
+    if (0) {
+m4a_resume_at:
+        switch (s->resume) {
+        case 0x004u: goto R004; case 0x008u: goto R008; case 0x00cu: goto R00c; case 0x010u: goto R010; case 0x014u: goto R014; case 0x018u: goto R018;
+        case 0x01cu: goto R01c; case 0x020u: goto R020; case 0x024u: goto R024; case 0x028u: goto R028; case 0x02cu: goto R02c; case 0x030u: goto R030;
+        case 0x034u: goto R034; case 0x038u: goto R038; case 0x03cu: goto R03c; case 0x040u: goto R040; case 0x044u: goto R044; case 0x048u: goto R048;
+        case 0x04cu: goto R04c; case 0x050u: goto R050; case 0x054u: goto R054; case 0x058u: goto R058; case 0x05cu: goto R05c; case 0x060u: goto R060;
+        case 0x064u: goto R064; case 0x068u: goto R068; case 0x06cu: goto R06c; case 0x070u: goto R070; case 0x074u: goto R074; case 0x078u: goto R078;
+        case 0x07cu: goto R07c; case 0x080u: goto R080; case 0x084u: goto R084; case 0x088u: goto R088; case 0x08cu: goto R08c; case 0x090u: goto R090;
+        case 0x094u: goto R094; case 0x098u: goto R098; case 0x09cu: goto R09c; case 0x0a0u: goto R0a0; case 0x0a4u: goto R0a4; case 0x0a8u: goto R0a8;
+        case 0x0acu: goto R0ac; case 0x0b0u: goto R0b0; case 0x0b4u: goto R0b4; case 0x0b8u: goto R0b8; case 0x0bcu: goto R0bc; case 0x0c0u: goto R0c0;
+        case 0x0c4u: goto R0c4; case 0x0c8u: goto R0c8; case 0x0ccu: goto R0cc; case 0x0d0u: goto R0d0; case 0x0d4u: goto R0d4; case 0x0d8u: goto R0d8;
+        case 0x0dcu: goto R0dc; case 0x0e0u: goto R0e0; case 0x0e4u: goto R0e4; case 0x0e8u: goto R0e8; case 0x0ecu: goto R0ec; case 0x0f0u: goto R0f0;
+        case 0x0f4u: goto R0f4; case 0x0f8u: goto R0f8; case 0x0fcu: goto R0fc; case 0x100u: goto R100; case 0x104u: goto R104; case 0x108u: goto R108;
+        case 0x10cu: goto R10c; case 0x110u: goto R110; case 0x114u: goto R114; case 0x118u: goto R118; case 0x11cu: goto R11c; case 0x120u: goto R120;
+        case 0x124u: goto R124; case 0x128u: goto R128; case 0x12cu: goto R12c; case 0x130u: goto R130; case 0x134u: goto R134; case 0x138u: goto R138;
+        case 0x13cu: goto R13c; case 0x140u: goto R140; case 0x144u: goto R144;
+        default: return M4A_DECLINED;
+        }
+    }
+
+    R000: ;/* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
+    R004: ;/* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
+    R008: ;/* 3000008: ldrb  fp, [r4, #11]       */ fp = rd_u8(&wch, r4 + 11u, &cyc);          cyc -= 1; CHK(0x00cu);
+    R00c: ;/* 300000c: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x010u);
+    R010: ;/* 3000010: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x014u);
+    R014: ;/* 3000014: beq   L068                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x068u); goto L068; } CHK(0x018u);
 
 L018:
-    /* 3000018: ldrsb r6, [r3], #1        */ r6 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x01cu);
-    /* 300001c: mul   r1, r6, fp          */ r1 = r6 * fp;                              cyc -= 1; CHK(0x020u);
-    /* 3000020: ldrb  r0, [r5, #1584]     */ r0 = rd_u8(&wmix, r5 + 0x630u, &cyc);      cyc -= 1; CHK(0x024u);
-    /* 3000024: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x028u);
-    /* 3000028: strb  r0, [r5, #1584]     */ wr_u8(&wmix, r5 + 0x630u, (uint8_t)r0, &cyc); cyc -= 1; CHK(0x02cu);
-    /* 300002c: mul   r1, r6, sl          */ r1 = r6 * sl;                              cyc -= 1; CHK(0x030u);
-    /* 3000030: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x034u);
-    /* 3000034: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x038u);
-    /* 3000038: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x03cu);
-    /* 300003c: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x040u);
-    /* 3000040: bne   L05C                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x05cu); goto L05C; } CHK(0x044u);
-    /* 3000044: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x048u);
-    /* 3000048: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x04cu);
-    /* 300004c: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x050u);
-    /* 3000050: bne   L05C                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x05cu); goto L05C; } CHK(0x054u);
-    /* 3000054: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x058u);
-    /* 3000058: b     L144                */ cyc -= 2; CHK(0x144u); goto L144;
+    R018: ;/* 3000018: ldrsb r6, [r3], #1        */ r6 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x01cu);
+    R01c: ;/* 300001c: mul   r1, r6, fp          */ r1 = r6 * fp;                              cyc -= 1; CHK(0x020u);
+    R020: ;/* 3000020: ldrb  r0, [r5, #1584]     */ r0 = rd_u8(&wmix, r5 + 0x630u, &cyc);      cyc -= 1; CHK(0x024u);
+    R024: ;/* 3000024: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x028u);
+    R028: ;/* 3000028: strb  r0, [r5, #1584]     */ wr_u8(&wmix, r5 + 0x630u, (uint8_t)r0, &cyc); cyc -= 1; CHK(0x02cu);
+    R02c: ;/* 300002c: mul   r1, r6, sl          */ r1 = r6 * sl;                              cyc -= 1; CHK(0x030u);
+    R030: ;/* 3000030: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x034u);
+    R034: ;/* 3000034: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x038u);
+    R038: ;/* 3000038: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x03cu);
+    R03c: ;/* 300003c: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x040u);
+    R040: ;/* 3000040: bne   L05C                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x05cu); goto L05C; } CHK(0x044u);
+    R044: ;/* 3000044: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x048u);
+    R048: ;/* 3000048: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x04cu);
+    R04c: ;/* 300004c: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x050u);
+    R050: ;/* 3000050: bne   L05C                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x05cu); goto L05C; } CHK(0x054u);
+    R054: ;/* 3000054: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x058u);
+    R058: ;/* 3000058: b     L144                */ cyc -= 2; CHK(0x144u); goto L144;
 L05C:
-    /* 300005c: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x060u);
-    /* 3000060: bgt   L018                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x018u); goto L018; } CHK(0x064u);
-    /* 3000064: b     L13C                */ cyc -= 2; CHK(0x13cu); goto L13C;
+    R05c: ;/* 300005c: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x060u);
+    R060: ;/* 3000060: bgt   L018                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x018u); goto L018; } CHK(0x064u);
+    R064: ;/* 3000064: b     L13C                */ cyc -= 2; CHK(0x13cu); goto L13C;
 
 L068:
-    /* 3000068: ldr   r7, [r4, #28]       */ r7 = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x06cu);
-    /* 300006c: ldr   lr, [r4, #32]       */ lr = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x070u);
+    R068: ;/* 3000068: ldr   r7, [r4, #28]       */ r7 = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x06cu);
+    R06c: ;/* 300006c: ldr   lr, [r4, #32]       */ lr = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x070u);
 L070:
-    /* 3000070: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x074u);
-    /* 3000074: bcc   L094                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x094u); goto L094; } CHK(0x078u);
+    R070: ;/* 3000070: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x074u);
+    R074: ;/* 3000074: bcc   L094                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x094u); goto L094; } CHK(0x078u);
 L078:
-    /* 3000078: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x07cu);
-    /* 300007c: ble   L0B8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0b8u); goto L0B8; } CHK(0x080u);
-    /* 3000080: sub   r2, r2, #4          */ r2 -= 4u;                                  cyc -= 1; CHK(0x084u);
-    /* 3000084: add   r3, r3, #4          */ r3 += 4u;                                  cyc -= 1; CHK(0x088u);
-    /* 3000088: sub   r7, r7, r9, lsl #2  */ r7 -= (r9 << 2);                           cyc -= 1; CHK(0x08cu);
-    /* 300008c: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x090u);
-    /* 3000090: bcs   L078                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x078u); goto L078; } CHK(0x094u);
+    R078: ;/* 3000078: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x07cu);
+    R07c: ;/* 300007c: ble   L0B8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0b8u); goto L0B8; } CHK(0x080u);
+    R080: ;/* 3000080: sub   r2, r2, #4          */ r2 -= 4u;                                  cyc -= 1; CHK(0x084u);
+    R084: ;/* 3000084: add   r3, r3, #4          */ r3 += 4u;                                  cyc -= 1; CHK(0x088u);
+    R088: ;/* 3000088: sub   r7, r7, r9, lsl #2  */ r7 -= (r9 << 2);                           cyc -= 1; CHK(0x08cu);
+    R08c: ;/* 300008c: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x090u);
+    R090: ;/* 3000090: bcs   L078                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x078u); goto L078; } CHK(0x094u);
 L094:
-    /* 3000094: cmp   r7, r9, lsl #1      */ { uint32_t b = r9 << 1, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x098u);
-    /* 3000098: bcc   L0B0                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x0b0u); goto L0B0; } CHK(0x09cu);
-    /* 300009c: cmp   r2, #2              */ { uint32_t d = r2 - 2u; SET_SUB(r2, 2u, d); } cyc -= 1; CHK(0x0a0u);
-    /* 30000a0: ble   L0B8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0b8u); goto L0B8; } CHK(0x0a4u);
-    /* 30000a4: sub   r2, r2, #2          */ r2 -= 2u;                                  cyc -= 1; CHK(0x0a8u);
-    /* 30000a8: add   r3, r3, #2          */ r3 += 2u;                                  cyc -= 1; CHK(0x0acu);
-    /* 30000ac: sub   r7, r7, r9, lsl #1  */ r7 -= (r9 << 1);                           cyc -= 1; CHK(0x0b0u);
+    R094: ;/* 3000094: cmp   r7, r9, lsl #1      */ { uint32_t b = r9 << 1, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x098u);
+    R098: ;/* 3000098: bcc   L0B0                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x0b0u); goto L0B0; } CHK(0x09cu);
+    R09c: ;/* 300009c: cmp   r2, #2              */ { uint32_t d = r2 - 2u; SET_SUB(r2, 2u, d); } cyc -= 1; CHK(0x0a0u);
+    R0a0: ;/* 30000a0: ble   L0B8                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0b8u); goto L0B8; } CHK(0x0a4u);
+    R0a4: ;/* 30000a4: sub   r2, r2, #2          */ r2 -= 2u;                                  cyc -= 1; CHK(0x0a8u);
+    R0a8: ;/* 30000a8: add   r3, r3, #2          */ r3 += 2u;                                  cyc -= 1; CHK(0x0acu);
+    R0ac: ;/* 30000ac: sub   r7, r7, r9, lsl #1  */ r7 -= (r9 << 1);                           cyc -= 1; CHK(0x0b0u);
 L0B0:
-    /* 30000b0: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0b4u);
-    /* 30000b4: bcc   L0E8                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0e8u); goto L0E8; } CHK(0x0b8u);
+    R0b0: ;/* 30000b0: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0b4u);
+    R0b4: ;/* 30000b4: bcc   L0E8                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0e8u); goto L0E8; } CHK(0x0b8u);
 L0B8:
-    /* 30000b8: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0bcu);
-    /* 30000bc: bne   L0D8                */ cyc -= 1; if (!z_f) { cyc -= 1; CHK(0x0d8u); goto L0D8; } CHK(0x0c0u);
-    /* 30000c0: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x0c4u);
-    /* 30000c4: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x0c8u);
-    /* 30000c8: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x0ccu);
-    /* 30000cc: bne   L0DC                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0dcu); goto L0DC; } CHK(0x0d0u);
-    /* 30000d0: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x0d4u);
-    /* 30000d4: b     L144                */ cyc -= 2; CHK(0x144u); goto L144;
+    R0b8: ;/* 30000b8: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0bcu);
+    R0bc: ;/* 30000bc: bne   L0D8                */ cyc -= 1; if (!z_f) { cyc -= 1; CHK(0x0d8u); goto L0D8; } CHK(0x0c0u);
+    R0c0: ;/* 30000c0: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x0c4u);
+    R0c4: ;/* 30000c4: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x0c8u);
+    R0c8: ;/* 30000c8: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x0ccu);
+    R0cc: ;/* 30000cc: bne   L0DC                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0dcu); goto L0DC; } CHK(0x0d0u);
+    R0d0: ;/* 30000d0: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x0d4u);
+    R0d4: ;/* 30000d4: b     L144                */ cyc -= 2; CHK(0x144u); goto L144;
 L0D8:
-    /* 30000d8: add   r3, r3, #1          */ r3 += 1u;                                  cyc -= 1; CHK(0x0dcu);
+    R0d8: ;/* 30000d8: add   r3, r3, #1          */ r3 += 1u;                                  cyc -= 1; CHK(0x0dcu);
 L0DC:
-    /* 30000dc: sub   r7, r7, r9          */ r7 -= r9;                                  cyc -= 1; CHK(0x0e0u);
-    /* 30000e0: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0e4u);
-    /* 30000e4: bcs   L0B8                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x0b8u); goto L0B8; } CHK(0x0e8u);
+    R0dc: ;/* 30000dc: sub   r7, r7, r9          */ r7 -= r9;                                  cyc -= 1; CHK(0x0e0u);
+    R0e0: ;/* 30000e0: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0e4u);
+    R0e4: ;/* 30000e4: bcs   L0B8                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x0b8u); goto L0B8; } CHK(0x0e8u);
 L0E8:
-    /* 30000e8: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x0ecu);
-    /* 30000ec: ldrsb r1, [r3, #1]        */ r1 = (uint32_t)rd_s8(&wsmp, r3 + 1u, &cyc); cyc -= 1; CHK(0x0f0u);
-    /* 30000f0: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x0f4u);
-    /* 30000f4: mul   r6, r1, r7          */ r6 = r1 * r7;                              cyc -= 1; CHK(0x0f8u);
-    /* 30000f8: mul   r1, r6, ip          */ r1 = r6 * ip;                              cyc -= 1; CHK(0x0fcu);
-    /* 30000fc: add   r6, r0, r1, asr #23 */ r6 = r0 + (uint32_t)(((int32_t)r1) >> 23); cyc -= 1; CHK(0x100u);
-    /* 3000100: mul   r1, r6, fp          */ r1 = r6 * fp;
+    R0e8: ;/* 30000e8: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x0ecu);
+    R0ec: ;/* 30000ec: ldrsb r1, [r3, #1]        */ r1 = (uint32_t)rd_s8(&wsmp, r3 + 1u, &cyc); cyc -= 1; CHK(0x0f0u);
+    R0f0: ;/* 30000f0: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x0f4u);
+    R0f4: ;/* 30000f4: mul   r6, r1, r7          */ r6 = r1 * r7;                              cyc -= 1; CHK(0x0f8u);
+    R0f8: ;/* 30000f8: mul   r1, r6, ip          */ r1 = r6 * ip;                              cyc -= 1; CHK(0x0fcu);
+    R0fc: ;/* 30000fc: add   r6, r0, r1, asr #23 */ r6 = r0 + (uint32_t)(((int32_t)r1) >> 23); cyc -= 1; CHK(0x100u);
+    R100: ;/* 3000100: mul   r1, r6, fp          */ r1 = r6 * fp;
 #ifdef M4A_SABOTAGE
     r1 ^= 0x00000100u;   /* the RED, on the path this variant actually runs */
 #endif
                                                                                         cyc -= 1; CHK(0x104u);
-    /* 3000104: ldrb  r0, [r5, #1584]     */ r0 = rd_u8(&wmix, r5 + 0x630u, &cyc);      cyc -= 1; CHK(0x108u);
-    /* 3000108: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x10cu);
-    /* 300010c: strb  r0, [r5, #1584]     */ wr_u8(&wmix, r5 + 0x630u, (uint8_t)r0, &cyc); cyc -= 1; CHK(0x110u);
-    /* 3000110: mul   r1, r6, sl          */ r1 = r6 * sl;                              cyc -= 1; CHK(0x114u);
-    /* 3000114: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x118u);
-    /* 3000118: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x11cu);
-    /* 300011c: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x120u);
-    /* 3000120: add   r7, r7, lr          */ r7 += lr;                                  cyc -= 1; CHK(0x124u);
-    /* 3000124: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x128u);
-    /* 3000128: beq   L138                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x138u); goto L138; } CHK(0x12cu);
-    /* 300012c: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x130u);
-    /* 3000130: bcc   L0E8                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0e8u); goto L0E8; } CHK(0x134u);
-    /* 3000134: b     L070                */ cyc -= 2; CHK(0x070u); goto L070;
+    R104: ;/* 3000104: ldrb  r0, [r5, #1584]     */ r0 = rd_u8(&wmix, r5 + 0x630u, &cyc);      cyc -= 1; CHK(0x108u);
+    R108: ;/* 3000108: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x10cu);
+    R10c: ;/* 300010c: strb  r0, [r5, #1584]     */ wr_u8(&wmix, r5 + 0x630u, (uint8_t)r0, &cyc); cyc -= 1; CHK(0x110u);
+    R110: ;/* 3000110: mul   r1, r6, sl          */ r1 = r6 * sl;                              cyc -= 1; CHK(0x114u);
+    R114: ;/* 3000114: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x118u);
+    R118: ;/* 3000118: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x11cu);
+    R11c: ;/* 300011c: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x120u);
+    R120: ;/* 3000120: add   r7, r7, lr          */ r7 += lr;                                  cyc -= 1; CHK(0x124u);
+    R124: ;/* 3000124: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x128u);
+    R128: ;/* 3000128: beq   L138                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x138u); goto L138; } CHK(0x12cu);
+    R12c: ;/* 300012c: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x130u);
+    R130: ;/* 3000130: bcc   L0E8                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0e8u); goto L0E8; } CHK(0x134u);
+    R134: ;/* 3000134: b     L070                */ cyc -= 2; CHK(0x070u); goto L070;
 L138:
-    /* 3000138: str   r7, [r4, #28]       */ wr_u32(&wch, r4 + 28u, r7, &cyc, 0);       cyc -= 1; CHK(0x13cu);
+    R138: ;/* 3000138: str   r7, [r4, #28]       */ wr_u32(&wch, r4 + 28u, r7, &cyc, 0);       cyc -= 1; CHK(0x13cu);
 L13C:
-    /* 300013c: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x140u);
-    /* 3000140: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x144u);
+    R13c: ;/* 300013c: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x140u);
+    R140: ;/* 3000140: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x144u);
 L144:
-    /* 3000144: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
+    R144: ;/* 3000144: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
 
     if (FAILED())
         return M4A_DECLINED;
@@ -1515,6 +1682,14 @@ static int m4a_run_v6_bytes_mono(m4a_state *s, const m4a_bus *bus)
     ip = s->r[12]; sp = s->r[13]; lr = s->r[14];
     n_f = s->n; z_f = s->z; c_f = s->c; v_f = s->v;
 
+    if (s->resume) {               /* validated when the block started */
+        win_init(&wch,  bus);
+        win_init(&wmix, bus);
+        win_init(&wsmp, bus);
+        win_init(&wstk, bus);
+        goto m4a_resume_at;
+    }
+
     if (!writable_region(r5) || !writable_region(r4) || !writable_region(sp))
         return M4A_DECLINED;
 
@@ -1529,99 +1704,118 @@ static int m4a_run_v6_bytes_mono(m4a_state *s, const m4a_bus *bus)
 
 #define FAILED()  (wch.failed || wmix.failed || wsmp.failed || wstk.failed)
 
-    /* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
-    /* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
-    /* 3000008: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x00cu);
-    /* 300000c: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x010u);
-    /* 3000010: beq   L054                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x054u); goto L054; } CHK(0x014u);
+    if (0) {
+m4a_resume_at:
+        switch (s->resume) {
+        case 0x004u: goto R004; case 0x008u: goto R008; case 0x00cu: goto R00c; case 0x010u: goto R010; case 0x014u: goto R014; case 0x018u: goto R018;
+        case 0x01cu: goto R01c; case 0x020u: goto R020; case 0x024u: goto R024; case 0x028u: goto R028; case 0x02cu: goto R02c; case 0x030u: goto R030;
+        case 0x034u: goto R034; case 0x038u: goto R038; case 0x03cu: goto R03c; case 0x040u: goto R040; case 0x044u: goto R044; case 0x048u: goto R048;
+        case 0x04cu: goto R04c; case 0x050u: goto R050; case 0x054u: goto R054; case 0x058u: goto R058; case 0x05cu: goto R05c; case 0x060u: goto R060;
+        case 0x064u: goto R064; case 0x068u: goto R068; case 0x06cu: goto R06c; case 0x070u: goto R070; case 0x074u: goto R074; case 0x078u: goto R078;
+        case 0x07cu: goto R07c; case 0x080u: goto R080; case 0x084u: goto R084; case 0x088u: goto R088; case 0x08cu: goto R08c; case 0x090u: goto R090;
+        case 0x094u: goto R094; case 0x098u: goto R098; case 0x09cu: goto R09c; case 0x0a0u: goto R0a0; case 0x0a4u: goto R0a4; case 0x0a8u: goto R0a8;
+        case 0x0acu: goto R0ac; case 0x0b0u: goto R0b0; case 0x0b4u: goto R0b4; case 0x0b8u: goto R0b8; case 0x0bcu: goto R0bc; case 0x0c0u: goto R0c0;
+        case 0x0c4u: goto R0c4; case 0x0c8u: goto R0c8; case 0x0ccu: goto R0cc; case 0x0d0u: goto R0d0; case 0x0d4u: goto R0d4; case 0x0d8u: goto R0d8;
+        case 0x0dcu: goto R0dc; case 0x0e0u: goto R0e0; case 0x0e4u: goto R0e4; case 0x0e8u: goto R0e8; case 0x0ecu: goto R0ec; case 0x0f0u: goto R0f0;
+        case 0x0f4u: goto R0f4; case 0x0f8u: goto R0f8; case 0x0fcu: goto R0fc; case 0x100u: goto R100; case 0x104u: goto R104; case 0x108u: goto R108;
+        case 0x10cu: goto R10c; case 0x110u: goto R110; case 0x114u: goto R114; case 0x118u: goto R118; case 0x11cu: goto R11c; case 0x120u: goto R120;
+        default: return M4A_DECLINED;
+        }
+    }
+
+    R000: ;/* 3000000: str   r8, [sp]            */ wr_u32(&wstk, sp, r8, &cyc, 0);            cyc -= 1; CHK(0x004u);
+    R004: ;/* 3000004: ldrb  sl, [r4, #10]       */ sl = rd_u8(&wch, r4 + 10u, &cyc);          cyc -= 1; CHK(0x008u);
+    R008: ;/* 3000008: ldrb  r0, [r4, #1]        */ r0 = rd_u8(&wch, r4 + 1u, &cyc);           cyc -= 1; CHK(0x00cu);
+    R00c: ;/* 300000c: tst   r0, #8              */ SET_LOGIC(r0 & 8u);                        cyc -= 1; CHK(0x010u);
+    R010: ;/* 3000010: beq   L054                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x054u); goto L054; } CHK(0x014u);
 
 L014:
-    /* 3000014: ldrsb r6, [r3], #1        */ r6 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x018u);
-    /* 3000018: mul   r1, r6, sl          */ r1 = r6 * sl;                              cyc -= 1; CHK(0x01cu);
-    /* 300001c: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x020u);
-    /* 3000020: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x024u);
-    /* 3000024: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x028u);
-    /* 3000028: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x02cu);
-    /* 300002c: bne   L048                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x048u); goto L048; } CHK(0x030u);
-    /* 3000030: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x034u);
-    /* 3000034: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x038u);
-    /* 3000038: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x03cu);
-    /* 300003c: bne   L048                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x048u); goto L048; } CHK(0x040u);
-    /* 3000040: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x044u);
-    /* 3000044: b     L120                */ cyc -= 2; CHK(0x120u); goto L120;
+    R014: ;/* 3000014: ldrsb r6, [r3], #1        */ r6 = (uint32_t)rd_s8(&wsmp, r3, &cyc); r3 += 1u; cyc -= 1; CHK(0x018u);
+    R018: ;/* 3000018: mul   r1, r6, sl          */ r1 = r6 * sl;                              cyc -= 1; CHK(0x01cu);
+    R01c: ;/* 300001c: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x020u);
+    R020: ;/* 3000020: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x024u);
+    R024: ;/* 3000024: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x028u);
+    R028: ;/* 3000028: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x02cu);
+    R02c: ;/* 300002c: bne   L048                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x048u); goto L048; } CHK(0x030u);
+    R030: ;/* 3000030: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x034u);
+    R034: ;/* 3000034: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x038u);
+    R038: ;/* 3000038: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x03cu);
+    R03c: ;/* 300003c: bne   L048                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x048u); goto L048; } CHK(0x040u);
+    R040: ;/* 3000040: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x044u);
+    R044: ;/* 3000044: b     L120                */ cyc -= 2; CHK(0x120u); goto L120;
 L048:
-    /* 3000048: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x04cu);
-    /* 300004c: bgt   L014                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x014u); goto L014; } CHK(0x050u);
-    /* 3000050: b     L118                */ cyc -= 2; CHK(0x118u); goto L118;
+    R048: ;/* 3000048: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x04cu);
+    R04c: ;/* 300004c: bgt   L014                */ cyc -= 1; if (COND_GT()) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x014u); goto L014; } CHK(0x050u);
+    R050: ;/* 3000050: b     L118                */ cyc -= 2; CHK(0x118u); goto L118;
 
 L054:
-    /* 3000054: ldr   r7, [r4, #28]       */ r7 = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x058u);
-    /* 3000058: ldr   lr, [r4, #32]       */ lr = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x05cu);
+    R054: ;/* 3000054: ldr   r7, [r4, #28]       */ r7 = rd_u32(&wch, r4 + 28u, &cyc, 0);      cyc -= 1; CHK(0x058u);
+    R058: ;/* 3000058: ldr   lr, [r4, #32]       */ lr = rd_u32(&wch, r4 + 32u, &cyc, 0);      cyc -= 1; CHK(0x05cu);
 L05C:
-    /* 300005c: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x060u);
-    /* 3000060: bcc   L080                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x080u); goto L080; } CHK(0x064u);
+    R05c: ;/* 300005c: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x060u);
+    R060: ;/* 3000060: bcc   L080                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x080u); goto L080; } CHK(0x064u);
 L064:
-    /* 3000064: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x068u);
-    /* 3000068: ble   L0A4                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0a4u); goto L0A4; } CHK(0x06cu);
-    /* 300006c: sub   r2, r2, #4          */ r2 -= 4u;                                  cyc -= 1; CHK(0x070u);
-    /* 3000070: add   r3, r3, #4          */ r3 += 4u;                                  cyc -= 1; CHK(0x074u);
-    /* 3000074: sub   r7, r7, r9, lsl #2  */ r7 -= (r9 << 2);                           cyc -= 1; CHK(0x078u);
-    /* 3000078: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x07cu);
-    /* 300007c: bcs   L064                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x064u); goto L064; } CHK(0x080u);
+    R064: ;/* 3000064: cmp   r2, #4              */ { uint32_t d = r2 - 4u; SET_SUB(r2, 4u, d); } cyc -= 1; CHK(0x068u);
+    R068: ;/* 3000068: ble   L0A4                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0a4u); goto L0A4; } CHK(0x06cu);
+    R06c: ;/* 300006c: sub   r2, r2, #4          */ r2 -= 4u;                                  cyc -= 1; CHK(0x070u);
+    R070: ;/* 3000070: add   r3, r3, #4          */ r3 += 4u;                                  cyc -= 1; CHK(0x074u);
+    R074: ;/* 3000074: sub   r7, r7, r9, lsl #2  */ r7 -= (r9 << 2);                           cyc -= 1; CHK(0x078u);
+    R078: ;/* 3000078: cmp   r7, r9, lsl #2      */ { uint32_t b = r9 << 2, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x07cu);
+    R07c: ;/* 300007c: bcs   L064                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x064u); goto L064; } CHK(0x080u);
 L080:
-    /* 3000080: cmp   r7, r9, lsl #1      */ { uint32_t b = r9 << 1, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x084u);
-    /* 3000084: bcc   L09C                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x09cu); goto L09C; } CHK(0x088u);
-    /* 3000088: cmp   r2, #2              */ { uint32_t d = r2 - 2u; SET_SUB(r2, 2u, d); } cyc -= 1; CHK(0x08cu);
-    /* 300008c: ble   L0A4                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0a4u); goto L0A4; } CHK(0x090u);
-    /* 3000090: sub   r2, r2, #2          */ r2 -= 2u;                                  cyc -= 1; CHK(0x094u);
-    /* 3000094: add   r3, r3, #2          */ r3 += 2u;                                  cyc -= 1; CHK(0x098u);
-    /* 3000098: sub   r7, r7, r9, lsl #1  */ r7 -= (r9 << 1);                           cyc -= 1; CHK(0x09cu);
+    R080: ;/* 3000080: cmp   r7, r9, lsl #1      */ { uint32_t b = r9 << 1, d = r7 - b; SET_SUB(r7, b, d); } cyc -= 1; CHK(0x084u);
+    R084: ;/* 3000084: bcc   L09C                */ cyc -= 1; if (!c_f) { cyc -= 1; CHK(0x09cu); goto L09C; } CHK(0x088u);
+    R088: ;/* 3000088: cmp   r2, #2              */ { uint32_t d = r2 - 2u; SET_SUB(r2, 2u, d); } cyc -= 1; CHK(0x08cu);
+    R08c: ;/* 300008c: ble   L0A4                */ cyc -= 1; if (COND_LE()) { cyc -= 1; CHK(0x0a4u); goto L0A4; } CHK(0x090u);
+    R090: ;/* 3000090: sub   r2, r2, #2          */ r2 -= 2u;                                  cyc -= 1; CHK(0x094u);
+    R094: ;/* 3000094: add   r3, r3, #2          */ r3 += 2u;                                  cyc -= 1; CHK(0x098u);
+    R098: ;/* 3000098: sub   r7, r7, r9, lsl #1  */ r7 -= (r9 << 1);                           cyc -= 1; CHK(0x09cu);
 L09C:
-    /* 300009c: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0a0u);
-    /* 30000a0: bcc   L0D4                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d4u); goto L0D4; } CHK(0x0a4u);
+    R09c: ;/* 300009c: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0a0u);
+    R0a0: ;/* 30000a0: bcc   L0D4                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d4u); goto L0D4; } CHK(0x0a4u);
 L0A4:
-    /* 30000a4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0a8u);
-    /* 30000a8: bne   L0C4                */ cyc -= 1; if (!z_f) { cyc -= 1; CHK(0x0c4u); goto L0C4; } CHK(0x0acu);
-    /* 30000ac: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x0b0u);
-    /* 30000b0: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x0b4u);
-    /* 30000b4: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x0b8u);
-    /* 30000b8: bne   L0C8                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0c8u); goto L0C8; } CHK(0x0bcu);
-    /* 30000bc: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x0c0u);
-    /* 30000c0: b     L120                */ cyc -= 2; CHK(0x120u); goto L120;
+    R0a4: ;/* 30000a4: subs  r2, r2, #1          */ { uint32_t a = r2, d = a - 1u; SET_SUB(a, 1u, d); r2 = d; } cyc -= 1; CHK(0x0a8u);
+    R0a8: ;/* 30000a8: bne   L0C4                */ cyc -= 1; if (!z_f) { cyc -= 1; CHK(0x0c4u); goto L0C4; } CHK(0x0acu);
+    R0ac: ;/* 30000ac: ldr   r2, [sp, #16]       */ r2 = rd_u32(&wstk, sp + 16u, &cyc, 0);     cyc -= 1; CHK(0x0b0u);
+    R0b0: ;/* 30000b0: cmp   r2, #0              */ SET_CMP0(r2);                              cyc -= 1; CHK(0x0b4u);
+    R0b4: ;/* 30000b4: ldrne r3, [sp, #12]       */ cyc -= 1; if (!z_f) r3 = rd_u32(&wstk, sp + 12u, &cyc, 0); CHK(0x0b8u);
+    R0b8: ;/* 30000b8: bne   L0C8                */ cyc -= 1; if (!z_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0c8u); goto L0C8; } CHK(0x0bcu);
+    R0bc: ;/* 30000bc: strb  r2, [r4]            */ wr_u8(&wch, r4, (uint8_t)r2, &cyc);        cyc -= 1; CHK(0x0c0u);
+    R0c0: ;/* 30000c0: b     L120                */ cyc -= 2; CHK(0x120u); goto L120;
 L0C4:
-    /* 30000c4: add   r3, r3, #1          */ r3 += 1u;                                  cyc -= 1; CHK(0x0c8u);
+    R0c4: ;/* 30000c4: add   r3, r3, #1          */ r3 += 1u;                                  cyc -= 1; CHK(0x0c8u);
 L0C8:
-    /* 30000c8: sub   r7, r7, r9          */ r7 -= r9;                                  cyc -= 1; CHK(0x0ccu);
-    /* 30000cc: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0d0u);
-    /* 30000d0: bcs   L0A4                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x0a4u); goto L0A4; } CHK(0x0d4u);
+    R0c8: ;/* 30000c8: sub   r7, r7, r9          */ r7 -= r9;                                  cyc -= 1; CHK(0x0ccu);
+    R0cc: ;/* 30000cc: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x0d0u);
+    R0d0: ;/* 30000d0: bcs   L0A4                */ cyc -= 1; if (c_f) { cyc -= 1; CHK(0x0a4u); goto L0A4; } CHK(0x0d4u);
 L0D4:
-    /* 30000d4: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x0d8u);
-    /* 30000d8: ldrsb r1, [r3, #1]        */ r1 = (uint32_t)rd_s8(&wsmp, r3 + 1u, &cyc); cyc -= 1; CHK(0x0dcu);
-    /* 30000dc: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x0e0u);
-    /* 30000e0: mul   r6, r1, r7          */ r6 = r1 * r7;                              cyc -= 1; CHK(0x0e4u);
-    /* 30000e4: mul   r1, r6, ip          */ r1 = r6 * ip;                              cyc -= 1; CHK(0x0e8u);
-    /* 30000e8: add   r6, r0, r1, asr #23 */ r6 = r0 + (uint32_t)(((int32_t)r1) >> 23); cyc -= 1; CHK(0x0ecu);
-    /* 30000ec: mul   r1, r6, sl          */ r1 = r6 * sl;
+    R0d4: ;/* 30000d4: ldrsb r0, [r3]            */ r0 = (uint32_t)rd_s8(&wsmp, r3, &cyc);     cyc -= 1; CHK(0x0d8u);
+    R0d8: ;/* 30000d8: ldrsb r1, [r3, #1]        */ r1 = (uint32_t)rd_s8(&wsmp, r3 + 1u, &cyc); cyc -= 1; CHK(0x0dcu);
+    R0dc: ;/* 30000dc: sub   r1, r1, r0          */ r1 -= r0;                                  cyc -= 1; CHK(0x0e0u);
+    R0e0: ;/* 30000e0: mul   r6, r1, r7          */ r6 = r1 * r7;                              cyc -= 1; CHK(0x0e4u);
+    R0e4: ;/* 30000e4: mul   r1, r6, ip          */ r1 = r6 * ip;                              cyc -= 1; CHK(0x0e8u);
+    R0e8: ;/* 30000e8: add   r6, r0, r1, asr #23 */ r6 = r0 + (uint32_t)(((int32_t)r1) >> 23); cyc -= 1; CHK(0x0ecu);
+    R0ec: ;/* 30000ec: mul   r1, r6, sl          */ r1 = r6 * sl;
 #ifdef M4A_SABOTAGE
     r1 ^= 0x00000100u;
 #endif
                                                                                         cyc -= 1; CHK(0x0f0u);
-    /* 30000f0: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x0f4u);
-    /* 30000f4: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x0f8u);
-    /* 30000f8: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x0fcu);
-    /* 30000fc: add   r7, r7, lr          */ r7 += lr;                                  cyc -= 1; CHK(0x100u);
-    /* 3000100: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x104u);
-    /* 3000104: beq   L114                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x114u); goto L114; } CHK(0x108u);
-    /* 3000108: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x10cu);
-    /* 300010c: bcc   L0D4                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d4u); goto L0D4; } CHK(0x110u);
-    /* 3000110: b     L05C                */ cyc -= 2; CHK(0x05cu); goto L05C;
+    R0f0: ;/* 30000f0: ldrb  r0, [r5]            */ r0 = rd_u8(&wmix, r5, &cyc);               cyc -= 1; CHK(0x0f4u);
+    R0f4: ;/* 30000f4: add   r0, r0, r1, asr #8  */ r0 += (uint32_t)(((int32_t)r1) >> 8);      cyc -= 1; CHK(0x0f8u);
+    R0f8: ;/* 30000f8: strb  r0, [r5], #1        */ wr_u8(&wmix, r5, (uint8_t)r0, &cyc); r5 += 1u; cyc -= 1; CHK(0x0fcu);
+    R0fc: ;/* 30000fc: add   r7, r7, lr          */ r7 += lr;                                  cyc -= 1; CHK(0x100u);
+    R100: ;/* 3000100: subs  r8, r8, #1          */ { uint32_t a = r8, d = a - 1u; SET_SUB(a, 1u, d); r8 = d; } cyc -= 1; CHK(0x104u);
+    R104: ;/* 3000104: beq   L114                */ cyc -= 1; if (z_f) { cyc -= 1; CHK(0x114u); goto L114; } CHK(0x108u);
+    R108: ;/* 3000108: cmp   r7, r9              */ { uint32_t d = r7 - r9; SET_SUB(r7, r9, d); } cyc -= 1; CHK(0x10cu);
+    R10c: ;/* 300010c: bcc   L0D4                */ cyc -= 1; if (!c_f) { cyc -= 1; if (FAILED()) return M4A_DECLINED; CHK(0x0d4u); goto L0D4; } CHK(0x110u);
+    R110: ;/* 3000110: b     L05C                */ cyc -= 2; CHK(0x05cu); goto L05C;
 L114:
-    /* 3000114: str   r7, [r4, #28]       */ wr_u32(&wch, r4 + 28u, r7, &cyc, 0);       cyc -= 1; CHK(0x118u);
+    R114: ;/* 3000114: str   r7, [r4, #28]       */ wr_u32(&wch, r4 + 28u, r7, &cyc, 0);       cyc -= 1; CHK(0x118u);
 L118:
-    /* 3000118: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x11cu);
-    /* 300011c: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x120u);
+    R118: ;/* 3000118: str   r2, [r4, #24]       */ wr_u32(&wch, r4 + 24u, r2, &cyc, 0);       cyc -= 1; CHK(0x11cu);
+    R11c: ;/* 300011c: str   r3, [r4, #40]       */ wr_u32(&wch, r4 + 40u, r3, &cyc, 0);       cyc -= 1; CHK(0x120u);
 L120:
-    /* 3000120: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
+    R120: ;/* 3000120: ldr   r8, [sp]            */ r8 = rd_u32(&wstk, sp, &cyc, 0);           cyc -= 1;
 
     if (FAILED())
         return M4A_DECLINED;

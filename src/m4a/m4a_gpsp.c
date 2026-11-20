@@ -82,6 +82,19 @@ static const m4a_variant *s_variant;
 #endif
 static int (*s_run)(m4a_state *s, const m4a_bus *bus) M4A_TAIL_BSS;
 static void *s_run_mem M4A_TAIL_BSS;      /* the copy's allocation, freed on reset */
+
+/* A block that gave way mid-way (an interrupt, a DMA stall, the frame's
+ * end) is resumed natively where the interpreter comes back to it, instead
+ * of being interpreted to its end: with a line or timer interrupt that is
+ * most blocks (Advance Wars: 12-19% of its instructions were blocks' rests,
+ * ~200 interrupts a frame, 2026-11-20). While one is pending the hook PC is
+ * the instruction it stopped at, and the call there runs it from there --
+ * if the registers and flags are what it left (the interrupt returned to
+ * it), else the interpreter goes on, as before. Either way the hook goes
+ * back to the entry. No change to the interpreter's test (cpu.cc). */
+static int s_resume M4A_TAIL_BSS, s_resume_frames M4A_TAIL_BSS;
+static uint32_t s_entry_pc M4A_TAIL_BSS, s_res_regs[15] M4A_TAIL_BSS, s_res_flags M4A_TAIL_BSS;
+static uint32_t s_res_pc M4A_TAIL_BSS;
 static int s_scan_done;      /* found it, or given up */
 static int s_frames_scanned;
 
@@ -147,11 +160,23 @@ static void m4a_cost(void *ctx, uint32_t addr, int *c8n, int *c32n, int *c32s)
  *   - the flags must be in REG_CPSR. They live in the interpreter's locals while
  *     it runs, and in ours while we run, and update_gba() reads the register.
  */
+/* GCC: no loop-to-memcpy here -- the register copy below became a memcpy
+ * call, through a veneer out of ITCM, at every refill. Drop the attribute if
+ * the copy goes. */
+__attribute__((optimize("no-tree-loop-distribute-patterns")))
 static int m4a_refill(void *ctx, m4a_state *s)
 {
     unsigned int ret, cpsr;
     int i;
     (void)ctx;
+
+    /* the block as it stops here: where and how to resume it, should the
+     * interpreter take over now (an interrupt below banks r13/r14 and moves
+     * the PC to its vector; what the block left is this) */
+    s_res_pc = s->pc;
+    for (i = 0; i < 15; i++)
+        s_res_regs[i] = s->r[i];
+    s_res_flags = (s->n << 3) | (s->z << 2) | (s->c << 1) | s->v;
 
     for (i = 0; i < 15; i++)
         reg[i] = s->r[i];
@@ -275,6 +300,7 @@ M4A_COLD void m4a_hle_reset(void)
     s_run_mem = 0;
 #endif
     s_run            = 0;
+    s_resume         = 0;
     m4a_hook_pc      = 0;
     m4a_hook_exit_pc = 0;
     s_variant        = 0;
@@ -289,6 +315,12 @@ M4A_COLD void m4a_hle_scan_frame(void)
     uint32_t pc = 0;
     const m4a_variant *v;
 
+    /* a resume the interpreter never came back to (it took the block's
+     * rest another way): the entry is hooked again */
+    if (s_resume && ++s_resume_frames > 2) {
+        s_resume = 0;
+        m4a_hook_pc = s_entry_pc;
+    }
     if (s_scan_done)
         return;
     if (++s_frames_scanned > M4A_SCAN_FRAME_LIMIT) {
@@ -348,6 +380,19 @@ int m4a_hle_execute(unsigned int *regs, int *cycles,
     st.cycles = *cycles;
     st.n = *n; st.z = *z; st.c = *c; st.v = *v;
     st.pc = m4a_hook_pc;       /* the block's base; CHK() builds resume PCs from it */
+    st.resume = 0;
+    if (s_resume) {            /* called at the instruction it gave way at */
+        uint32_t f = (*n << 3) | (*z << 2) | (*c << 1) | *v;
+        s_resume = 0;
+        m4a_hook_pc = s_entry_pc;
+        for (i = 0; i < 15; i++)
+            if (regs[i] != s_res_regs[i])
+                return M4A_DECLINED;
+        if (f != s_res_flags)
+            return M4A_DECLINED;
+        st.resume = st.pc - s_entry_pc;
+        st.pc = s_entry_pc;
+    }
 
     GBA_PROF_START(GBA_PART_M4A);
     rc = s_run(&st, &s_bus);
@@ -362,8 +407,15 @@ int m4a_hle_execute(unsigned int *regs, int *cycles,
         regs[i] = st.r[i];
     *cycles = st.cycles;
     *n = st.n; *z = st.z; *c = st.c; *v = st.v;
-    if (rc != M4A_DONE)
+    if (rc != M4A_DONE) {
         regs[15] = st.pc;      /* gave way mid-block: this is where to pick up */
+        /* ...natively, if the interpreter comes back to the instruction it
+         * stopped at (m4a_refill noted it, with its registers and flags) */
+        s_resume = 1;
+        s_resume_frames = 0;
+        s_entry_pc = m4a_hook_pc;
+        m4a_hook_pc = s_res_pc;
+    }
     return rc;
 }
 
@@ -405,6 +457,7 @@ static int m4a_hle_execute_offline(unsigned int *regs, long *cost,
     st.cycles = M4A_OFFLINE_BUDGET;
     st.n = *n; st.z = *z; st.c = *c; st.v = *v;
     st.pc = m4a_hook_pc;
+    st.resume = 0;
 
     rc = s_run(&st, &s_bus_offline);
     if (rc != M4A_DONE)

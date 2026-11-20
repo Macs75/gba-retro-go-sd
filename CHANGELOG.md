@@ -27,6 +27,17 @@ attached to the release:
 
 ### Added
 
+- **The M4A native mixer resumes a block after an interrupt** instead of
+  leaving the block's rest to the interpreter: it notes where it stopped
+  (with the registers and flags) and, when the interrupt returns there,
+  runs on from that instruction (every runner now has an entry at each
+  instruction, tools/m4a_add_resume.py), if the registers and flags are as
+  it left them. With a line or timer interrupt most blocks are interrupted:
+  Advance Wars interpreted 17K mixer instructions a frame, now none. With
+  the calling-loop skip, power-on census: GT Advance -68%, Final Fight One
+  -66%, Dragon Quest Monsters: Caravan Heart -62%, Advance Wars 2 -43%,
+  Advance Wars -36%, Mega Man Battle Network -28%, Zone of the Enders -28%,
+  Lunar Legend -21%, 11 more -1 to -8%; none worse, hashes identical.
 - **The generic wait-loop skip takes loops that call functions** (C code's
   `while (!flag) check_keys();`): the loop search steps over calls, and the
   proof covers the whole pass, callees included: the same registers, flags

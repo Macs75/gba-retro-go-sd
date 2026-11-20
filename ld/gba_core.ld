@@ -224,6 +224,7 @@ SECTIONS
      * (build 13), not derived: re-measure if this block's contents change. */
     . = ALIGN(32) + 28;
     build/m4a_gpsp.o (.text*)
+    . = ALIGN(. - 20, 32) + 20;   /* whatever m4a_gpsp.o's size */
     build/video.o (.text.update_scanline)
     /* PROF's PC sampler (gba_prof.c), the idle-skip hooks (gba_idle.c), the
      * scaler (gba_scale.c). The pass-head hook and the scaler keep their
