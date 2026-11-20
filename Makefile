@@ -38,6 +38,7 @@ src/porting/gba_scale.c \
 src/main_gba.c \
 src/porting/gba_bios_hle.c \
 src/m4a/m4a_hle.c \
+src/m4a/m4a_reverb.c \
 src/m4a/m4a_gpsp.c \
 src/porting/bilinear.c \
 src/hle/gba_hle_table.c \

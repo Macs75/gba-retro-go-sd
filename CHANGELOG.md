@@ -27,6 +27,16 @@ attached to the release:
 
 ### Added
 
+- **M4A's reverb loop runs natively** (src/m4a/m4a_reverb.c): the driver's
+  once-a-frame loop that folds the last buffer back into this one (15 ARM
+  instructions a sample), found by its bytes in IWRAM when the mixer is,
+  through the native-routine hook when no game HLE holds it; exact cycles
+  and stopping points, in the flash (nothing in RAM or ITCM moved). Power-on
+  census, on top of the mixer resume: 40 games -1% to -51% (Wings -51%, Wing
+  Commander: Prophecy -45%, Silent Scope -44%, Pokemon Pinball: Ruby &
+  Sapphire -43%, Klonoa -34%, Lilo & Stitch 2 -25%, Harvest Moon: FoMT
+  -17%, Pokemon Sapphire -16%), none worse, hashes identical. Advance Wars'
+  recording: a further -6.6% (median window).
 - **The M4A native mixer resumes a block after an interrupt** instead of
   leaving the block's rest to the interpreter: it notes where it stopped
   (with the registers and flags) and, when the interrupt returns there,

@@ -22,6 +22,7 @@
  *      catches it.
  */
 #include "m4a_hle.h"
+#include "m4a_reverb.h"
 #include "gba_prof.h"
 
 #include <stdio.h>
@@ -301,6 +302,7 @@ M4A_COLD void m4a_hle_reset(void)
 #endif
     s_run            = 0;
     s_resume         = 0;
+    m4a_reverb_reset();
     m4a_hook_pc      = 0;
     m4a_hook_exit_pc = 0;
     s_variant        = 0;
@@ -344,6 +346,7 @@ M4A_COLD void m4a_hle_scan_frame(void)
     m4a_hook_pc      = pc;
     m4a_hook_exit_pc = pc + v->exit_off;
     s_scan_done      = 1;
+    m4a_reverb_find();       /* the driver's reverb loop, natively if it can */
 #ifdef M4A_HLE_VERIFY
     m4a_blk_size     = v->size;
 #endif
