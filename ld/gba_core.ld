@@ -63,18 +63,31 @@ SECTIONS
     . = ALIGN(. - 0xd24, 0x2000) + 0xd24;
     build/video.o (.text._Z13render_object*)
     build/video.o (.text._ZL16render_w_effects*)
-    /* order_obj and the blended sprite renderers after it at their measured
-     * place mod 8 KB (0x240540b4: Super Puzzle Fighter II runs 5-7) whatever
-     * render_w_effects' size: it grew 924 bytes with the effect table's
-     * loops. The section starts 0x1000 mod 8 KB, hence 0x10b4. */
-    . = ALIGN(. - 0x10b4, 0x2000) + 0x10b4;
+    /* obj_rows_by_priority (once per sprite-list build, ~20 times a frame
+     * in Super Puzzle Fighter II) at 0x0800 mod 8 KB, in the room the pins
+     * below leave: the quietest place of the hot RAM code of Kirby & The
+     * Amazing Mirror and Super Puzzle Fighter II (callgrind-weighted,
+     * 2026-11-20: 0.08 and 0.12 of their busiest 256 bytes; at 0x1b28, 0.98
+     * and 0.91, it cost Puzzle Fighter's full board 5-10% drawing). The
+     * section starts 0x1000 mod 8 KB, hence 0x1800. */
+    . = ALIGN(. - 0x1800, 0x2000) + 0x1800;
+    build/video.o (.text._ZL20obj_rows_by_priority*)
+    /* order_obj at 0x0074 mod 8 KB, the blended sprite renderers after
+     * it at their measured place, 0x240562ec (Super Puzzle Fighter II runs
+     * 5-7), whatever render_w_effects' size (it grew 924 bytes with the
+     * effect table's loops) and order_obj's (up to 0x278 bytes). */
+    . = ALIGN(. - 0x1074, 0x2000) + 0x1074;
     build/video.o (.text._ZL9order_obj*)
+    . = ALIGN(. - 0x12ec, 0x2000) + 0x12ec;
     /* The blending path's sprite renderers (32-bit line buffer, the indexed
      * and stacked-colour instances) and the per-line window/effects driver:
      * the hottest drawing code of a blended screen, which ran from the flash
      * (Tony's blended menu, PC sampler 2026-11-15). Room for them: the
      * load-time and savestate code went to the flash (GBA_COLD, common.h). */
     build/video.o (.text._Z20render_scanline_objsIjL8rendtype1EEvjjjPvPKt*)
+    /* what follows at its measured place, 0x240573c0 (0x13c0 mod 8 KB),
+     * whatever the renderer above's size (0x3c0 section-relative) */
+    . = ALIGN(. - 0x3c0, 0x2000) + 0x3c0;
     build/video.o (.text._Z20render_scanline_objsIjL8rendtype2EEvjjjPvPKt*)
     build/video.o (.text._ZL27render_scanline_conditionaljjPtj)
 

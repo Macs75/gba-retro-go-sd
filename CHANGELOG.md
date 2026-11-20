@@ -127,6 +127,12 @@ attached to the release:
   save's bank switching against a reference); `tools/gba_fn_codegen.sh`, one
   object in the release toolchain with a function's size, stack accesses and
   literal loads (a register-pressure check).
+- Host: `GBA_MONKEY=<seed>` (random buttons in the place of the keyboard,
+  to get games through their menus without a recording;
+  `GBA_MONKEY_START=<pct>` the Start presses after the first minute) and
+  `GBA_OBJMAX=1` (the most distinct sprites one priority puts on one line);
+  `tools/gba_objmax_census.sh` runs both over a ROM set, with each game's
+  last frame to see which reached play.
 - Host: `GBA_FAST=1`, `GBA_EXIT_FRAME=N`, `GBA_FRAMESKIP=N`, `GBA_RECORD=1` /
   `GBA_REPLAY=1` (`GBA_REC_AT=N`), `GBA_HASH_EVERY=N`, `GBA_INPUT_RAW=<file>`.
 
@@ -312,6 +318,27 @@ attached to the release:
 
 ### Fixed
 
+- **Sprites beyond 32 on one priority on one line were not drawn.** The
+  sprite lists were cut from gpSP's 128 per priority per line (100 KB) to
+  32 to fit the RAM, and a line that asked for more dropped the rest: Donald
+  Duck's forehead in a Kingdom Hearts: Chain of Memories dialog went missing
+  once the text was written. Now one list a line holds all its sprites (at
+  most the 128 of OAM; the per-line OBJ cycle budget still applies, as on
+  the hardware), in priority order, in the RAM the old lists used. A census
+  (`tools/gba_objmax_census.sh`, 149 games, random input; and the
+  recordings) found 23 games past 32 and 5 past 48: Spyro: Season of Ice
+  73, Bruce Lee: Return of the Legend 57, Rayman Advance 56, Kingdom Hearts:
+  Chain of Memories 52, Yggdra Union 51; then Yoshi's Island 48, Mega Man
+  Zero 2 and FF Tactics Advance 46, Tony Hawk's Pro Skater 3 44, FF V
+  Advance 43, Super Puzzle Fighter II 35. No fixed bound below the
+  hardware's fits the RAM. A line on one priority is in order as listed; a
+  line that mixes them is sorted once per list build (`obj_rows_by_priority`,
+  at 0x0800 mod 8 KB: linked behind the idle code it sat on the busiest
+  I-cache sets of both games below and cost twice as much). Device:
+  Kirby & The Amazing Mirror +0.4% drawing per drawn frame, frames not
+  drawn unchanged; Super Puzzle Fighter II (lists rebuilt ~20 times a
+  frame, priorities mixed) +2.0%, frames not drawn 309 -> 350 over the
+  replay. Every frame identical where no line went past 32.
 - **WarioWare, Inc.: Mega Microgame$! froze at Jimmy's disco stage**
   (device only): the OBJ window renders its inside into the line below as
   scratch, so the last line needs a line 160; the 160-line framebuffer had

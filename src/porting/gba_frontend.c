@@ -63,9 +63,8 @@ unsigned int idle_loop_cond = 0;
 unsigned int translation_gate_targets = 0;
 unsigned int translation_gate_target_pc[GBA_MAX_TRANSLATION_GATES];
 
-/* Honour the GBA's real per-line sprite budget rather than drawing all 128. The
- * hardware could not fetch them either, and OBJ_PER_LINE_MAX (32) sizes the
- * priority list to match. */
+/* Honour the GBA's real per-line sprite budget (its OBJ render cycles a
+ * line, video.cc order_obj) rather than drawing all 128 sprites a line. */
 int sprite_limit = 1;
 
 /* The frame driver in main_gba.c sets this from common_emu_frame_loop(): the PPU

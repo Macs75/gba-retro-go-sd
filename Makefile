@@ -75,7 +75,6 @@ ifeq ($(PROJECT_KIND),core)
 # a different constant in src/gpsp/cheats.h.
 #
 # ROM_BUFFER_SIZE=0    cart XIP from QSPI — not buffered in RAM.
-# OBJ_PER_LINE_MAX=32  caps sprite-line BSS (~120 KB saved vs gpSP default).
 # BUFFER_SIZE=4096     audio ring (gpSP default is 128 KB).
 # GBA_DTCM_BUFFERS     bios / sound / cheats allocated at runtime (DTCM/AHB).
 CORE_C_DEFS := \
@@ -84,7 +83,6 @@ CORE_C_DEFS := \
 -DCHEAT_CODES=1 \
 -DMAX_CHEAT_CODES=13 \
 -DROM_BUFFER_SIZE=0 \
--DOBJ_PER_LINE_MAX=32 \
 -DBUFFER_SIZE=4096 \
 -DGBA_SOUND_FREQUENCY=48000 \
 -DGBA_M4A_HLE \

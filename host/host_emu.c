@@ -545,6 +545,10 @@ static int host_fast(void)
     return f;
 }
 
+/* the loop's emulated frames so far (GBA_EXIT_FRAME's count), for host-only
+ * diagnostics in the core (video.cc GBA_OBJMAX) */
+unsigned host_frame_no;
+
 bool common_emu_frame_loop(void)
 {
     uint32_t now;
@@ -597,6 +601,7 @@ bool common_emu_frame_loop(void)
         exit(0);
     }
     frames++;
+    host_frame_no = frames;
     if (host_fast())
         return skip <= 0 || frames % (uint32_t)(skip + 1) == 0;
 
@@ -700,6 +705,55 @@ void cpumon_reset(void) {}
 
 /* --- Input ---------------------------------------------------------------- */
 
+/* GBA_MONKEY=<seed>: random buttons instead of the keyboard, to get games
+ * past their menus into play without a recording (census runs, e.g.
+ * tools/gba_objmax_census.sh). A new choice every 6 frames: a direction half
+ * the time, A, B, L, R, and Start -- often in the first minute (menus),
+ * after it GBA_MONKEY_START percent of the choices (default 1: it pauses).
+ * Never Select: A+B+Start+Select resets many games. Deterministic per
+ * seed. */
+static void host_monkey(odroid_gamepad_state_t *st)
+{
+    static int seed = -2, start_late;
+    static uint32_t rng, hold, n;
+    static uint8_t keys[ODROID_INPUT_MAX];
+    if (seed == -2) {
+        seed = host_env_int("GBA_MONKEY", -1);
+        start_late = host_env_int("GBA_MONKEY_START", 1);
+    }
+    if (seed < 0)
+        return;
+    if (n == 0)
+        rng = 0x9E3779B9u ^ (uint32_t)seed;
+    if (hold == 0) {
+#define RND(pct) ((rng = rng * 1664525u + 1013904223u, (rng >> 8) % 100u) < (pct))
+        memset(keys, 0, sizeof(keys));
+        hold = 6;
+        if (!RND(25)) {                          /* else: a release, for menus */
+            if (RND(50)) {
+                static const uint8_t dirs[4] = { ODROID_INPUT_UP, ODROID_INPUT_DOWN,
+                                                 ODROID_INPUT_LEFT, ODROID_INPUT_RIGHT };
+                rng = rng * 1664525u + 1013904223u;
+                keys[dirs[(rng >> 12) & 3]] = 1;
+            }
+            keys[ODROID_INPUT_A] = RND(50);
+            keys[ODROID_INPUT_B] = RND(30);
+            keys[ODROID_INPUT_X] = RND(10);
+            keys[ODROID_INPUT_Y] = RND(10);
+            keys[ODROID_INPUT_START] = RND(n < 3600 ? 15u : (uint32_t)start_late);
+        }
+#undef RND
+    }
+    hold--;
+    n++;
+    st->bitmask = 0;
+    for (int k = 0; k < ODROID_INPUT_MAX; k++) {
+        st->values[k] = keys[k];
+        if (keys[k])
+            st->bitmask |= (uint16_t)(1u << k);
+    }
+}
+
 void odroid_input_read_gamepad(odroid_gamepad_state_t *out_state)
 {
     int i;
@@ -712,6 +766,7 @@ void odroid_input_read_gamepad(odroid_gamepad_state_t *out_state)
         if (host_pad.values[i])
             out_state->bitmask |= (uint16_t)(1u << i);
     }
+    host_monkey(out_state);
     host_maybe_quit();
 }
 
