@@ -15,6 +15,7 @@
 HLE_OVERLAY(vrally3)
 HLE_OVERLAY(spf2)
 HLE_OVERLAY(rzw)
+HLE_OVERLAY(mgolf)
 extern uint8_t __gba_hle_window[];
 /* the size is an absolute linker symbol: its "address" is the value */
 #define HLE_BYTES(n) __load_start_gba_hle_##n, (uint32_t)(uintptr_t)__gba_hle_size_##n
@@ -31,6 +32,9 @@ static const gba_hle_desc gba_hle_games[] = {
     /* WarioWare: Twisted!: its division, 0x03000D38, and its sound mixing
      * loops, 0x030030E0-0x0300381C */
     { { 'R', 'Z', 'W', 'E' }, 0x03000D38u, 0x2AE8u, hle_rzw_run, HLE_BYTES(rzw) },
+    /* Mario Golf: Advance Tour: its sound mixing loops (interpolation and
+     * output stage), 0x03000A28-0x03000EE8 */
+    { { 'B', 'M', 'G', 'E' }, 0x03000A28u, 0x4C0u, hle_mgolf_run, HLE_BYTES(mgolf) },
 };
 
 GBA_COLD void gba_hle_select(const char *game_code)

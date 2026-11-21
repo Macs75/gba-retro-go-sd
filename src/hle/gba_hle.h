@@ -49,6 +49,7 @@ uint32_t cpu_hle_store32(uint32_t address, uint32_t value);
 uint64_t hle_vrally3_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 uint64_t hle_spf2_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 uint64_t hle_rzw_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
+uint64_t hle_mgolf_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 
 #ifdef __cplusplus
 }
