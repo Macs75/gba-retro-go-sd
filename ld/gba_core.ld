@@ -171,8 +171,9 @@ SECTIONS
      * and their dispatchers) and the blended track layers' instances
      * (indexed / stacked colour, wrapping, rotated). 29% of the core's work
      * in F-Zero: Maximum Velocity's race, all from the flash (2026-11-15).
-     * They use the room before .bss's pin (2.8 KB then): if more code has to
-     * go here, .bss moves 4 KB and RAM_EMU has no room for that. Not in
+     * With their rotated walks (2026-11-21) the code ends past .bss's pin
+     * at 0x2406bbe0, so .bss starts 4 KB later (0x2406cbe0), at the same
+     * place mod 4 KB. Not in
      * .core_entry: the linker puts a section's veneers at its end, and after
      * them there they moved cpu.o's tables. In .data, which is otherwise
      * empty: the SDK packs only .core_entry and .data (sdk/Makefile). */
@@ -180,6 +181,12 @@ SECTIONS
     build/video.o (.text._Z24render_affine_backgroundItL8rendtype0E*Lb0EEv*)
     build/video.o (.text._Z24render_affine_backgroundItL8rendtype1ELb?ELb1ELb1ELb0EEv*)
     build/video.o (.text._Z24render_affine_backgroundIjL8rendtype2ELb?ELb1ELb1ELb0EEv*)
+    /* their rotated walks (video.cc affine_rot_run, one per instance above)
+     * and the line span the non-wrapping ones share */
+    build/video.o (.text._Z14affine_rot_runItL8rendtype0E*)
+    build/video.o (.text._Z14affine_rot_runItL8rendtype1ELb?ELb1E*)
+    build/video.o (.text._Z14affine_rot_runIjL8rendtype2ELb?ELb1E*)
+    build/video.o (.text._ZL16affine_line_span*)
     /* ...and the bitmap-mode renderers (modes 3-5, every colour path) and
      * the window drivers: from the flash their cost moved with gba.xip's
      * place at every update -- V-Rally 3's bitmap-mode race +24% drawing

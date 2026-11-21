@@ -709,17 +709,19 @@ void cpumon_reset(void) {}
  * past their menus into play without a recording (census runs, e.g.
  * tools/gba_objmax_census.sh). A new choice every 6 frames: a direction half
  * the time, A, B, L, R, and Start -- often in the first minute (menus),
- * after it GBA_MONKEY_START percent of the choices (default 1: it pauses).
+ * after it GBA_MONKEY_START percent of the choices (default 1: it pauses);
+ * GBA_MONKEY_MENU the first minute's (default 15; 0 from a save state).
  * Never Select: A+B+Start+Select resets many games. Deterministic per
  * seed. */
 static void host_monkey(odroid_gamepad_state_t *st)
 {
-    static int seed = -2, start_late;
+    static int seed = -2, start_late, start_menu;
     static uint32_t rng, hold, n;
     static uint8_t keys[ODROID_INPUT_MAX];
     if (seed == -2) {
         seed = host_env_int("GBA_MONKEY", -1);
         start_late = host_env_int("GBA_MONKEY_START", 1);
+        start_menu = host_env_int("GBA_MONKEY_MENU", 15);
     }
     if (seed < 0)
         return;
@@ -740,7 +742,7 @@ static void host_monkey(odroid_gamepad_state_t *st)
             keys[ODROID_INPUT_B] = RND(30);
             keys[ODROID_INPUT_X] = RND(10);
             keys[ODROID_INPUT_Y] = RND(10);
-            keys[ODROID_INPUT_START] = RND(n < 3600 ? 15u : (uint32_t)start_late);
+            keys[ODROID_INPUT_START] = RND(n < 3600 ? (uint32_t)start_menu : (uint32_t)start_late);
         }
 #undef RND
     }

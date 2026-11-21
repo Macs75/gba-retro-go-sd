@@ -670,6 +670,97 @@ typedef void (*affine_render_function) (
   u32 map_size, const u8 *tile_base, void *dst_ptr,
   const u16* pal);
 
+/* A rotated layer's walk (no mosaic): its start, steps and what the
+ * per-pixel lookup reads, in one struct (affine_rot_run's arguments past
+ * the fourth would be on the stack, reloaded every pixel). */
+struct aff_walk {
+  s32 sx, sy, dx, dy;         // 24.8 map coordinates of the first pixel, steps
+  const u8 *tile_base, *map_base;
+  const u16 *pal;
+  u32 pitch;                  // log2 of the map's tiles a row
+  u32 cmask;                  // wrap: the map's cells a row - 1
+  u32 bg_comb, px_comb;
+};
+
+/* n pixels of a rotated layer, all inside the map (or wrapped). The map is
+ * read once per 8x8 cell the walk enters; a pixel is then one byte of that
+ * cell's tile (lookup_pix_8bpp's arithmetic, on the 24.8 coordinates: cell
+ * sx >> 11, in the tile (sx >> 8) & 7). A scaled-up layer stays in a cell
+ * for several pixels (Mario Golf: Advance Tour's field: 92%).
+ * GCC: noinline, noipa: its own registers, and w a pointer (scalarised by
+ * IPA-SRA its fields were stack arguments again). */
+template <typename dtype, rendtype rdtype, bool isbase, bool wrap>
+__attribute__((noinline, noipa))
+static void affine_rot_run(dtype *dst, u32 n, const struct aff_walk *w)
+{
+  dtype *const end = dst + n;
+  const u16 *const pal = w->pal;
+  const u8 *tp = NULL;
+  s32 sx = w->sx, sy = w->sy;
+  const s32 dx = w->dx, dy = w->dy;
+  u32 cell = ~0u;             // the cell read last: none yet
+  do {
+    u32 cx = (u32)(sx >> 11), cy = (u32)(sy >> 11);
+    if (wrap) {
+      cx &= w->cmask;
+      cy &= w->cmask;
+    }
+    u32 k = cx | (cy << 16);
+    if (k != cell) {          // another cell: its tile from the map
+      cell = k;
+      tp = &w->tile_base[w->map_base[cx + (cy << w->pitch)] * tile_size_8bpp];
+    }
+    rend_pix_8bpp<dtype, rdtype, isbase>(
+      dst, tp[((u32)(sx >> 8) & 7) | ((u32)(sy >> 5) & 0x38)], w->bg_comb, w->px_comb, pal);
+    sx += dx;
+    sy += dy;
+  } while (++dst != end);
+}
+
+/* The pixels t of [0, cnt) with 0 <= s + t * d < w, one axis of a line's
+ * walk, intersected with [*lo, *hi): exactly the pixels whose coordinate
+ * (s + t * d) >> 8 the per-pixel test finds inside a w >> 8 map. 32-bit:
+ * |s| < 2^28, |d| < 2^15, w <= 2^18. */
+static inline void affine_axis_span(s32 s, s32 d, s32 w, u32 *lo, u32 *hi)
+{
+  u32 l = 0, h = *hi;
+  if (d == 0) {
+    if (s < 0 || s >= w)
+      h = 0;
+  } else if (d > 0) {
+    if (s < 0)
+      l = (u32)(-s + d - 1) / (u32)d;         // the first t with s + t*d >= 0
+    u32 e = s >= w ? 0 : (u32)(w - s + d - 1) / (u32)d;   // ... >= w
+    if (e < h)
+      h = e;
+  } else {
+    u32 nd = (u32)-d;
+    if (s >= w)
+      l = (u32)(s - w + (s32)nd) / nd;        // the first t with s + t*d < w
+    u32 e = s < 0 ? 0 : (u32)s / nd + 1;      // ... with s + t*d < 0
+    if (e < h)
+      h = e;
+  }
+  if (l > *lo)
+    *lo = l;
+  *hi = h;
+}
+
+/* A non-wrapping rotated layer's line: the pixels [*lo, *hi) of cnt on the
+ * map (*lo == *hi == cnt: none). Once per line and layer; one copy for
+ * every renderer instance. */
+__attribute__((noinline))
+static void affine_line_span(s32 sx, s32 sy, s32 dx, s32 dy, s32 w, u32 cnt,
+                             u32 *lo, u32 *hi)
+{
+  *lo = 0;
+  *hi = cnt;
+  affine_axis_span(sx, dx, w, lo, hi);
+  affine_axis_span(sy, dy, w, lo, hi);
+  if (*hi <= *lo)
+    *lo = *hi = cnt;
+}
+
 // Affine background rendering logic.
 // wrap extends the background infinitely, otherwise transparent/backdrop fill
 // rotate indicates if there's any rotation (optimized version for no-rotation)
@@ -697,6 +788,32 @@ static inline void render_affine_background(
 
   // Horizontal mosaic effect.
   const u32 mosh = (mosaic ? (read_ioreg(REG_MOSAIC)) & 0xF : 0) + 1;
+
+  // Rotated, no mosaic: the map's span of the line computed, then walked
+  // a cell at a time (affine_rot_run); the backdrop around it as below.
+  if (rotate && !mosaic) {
+    struct aff_walk wk = { source_x, source_y, dx, dy, tile_base, map_base, pal,
+                           map_size + 4, (width_height >> 3) - 1, bg_comb, px_comb };
+    if (wrap) {
+      if (cnt)
+        affine_rot_run<dtype, rdtype, isbase, true>(dst_ptr, cnt, &wk);
+      return;
+    }
+    u32 lo, hi;
+    affine_line_span(source_x, source_y, dx, dy, (s32)(width_height << 8), cnt, &lo, &hi);
+    if (isbase)
+      for (u32 i = 0; i < lo; i++)
+        render_bdrop_pixel_8bpp<dtype, rdtype>(&dst_ptr[i], bg_comb, pal[0]);
+    if (hi > lo) {
+      wk.sx += (s32)lo * dx;
+      wk.sy += (s32)lo * dy;
+      affine_rot_run<dtype, rdtype, isbase, false>(&dst_ptr[lo], hi - lo, &wk);
+    }
+    if (isbase)
+      for (u32 i = hi; i < cnt; i++)
+        render_bdrop_pixel_8bpp<dtype, rdtype>(&dst_ptr[i], bg_comb, pal[0]);
+    return;
+  }
 
   if (wrap) {
     // In wrap mode the entire space is covered, since it "wraps" at the edges

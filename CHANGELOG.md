@@ -138,6 +138,20 @@ attached to the release:
 
 ### Changed
 
+- **Rotated layers draw a cell at a time.** A rotated, unmosaiced layer
+  (modes 1 and 2) now computes once per line which of its pixels fall on
+  the map (exactly, in integers: no bounds test per pixel), and walks them
+  reading the map once per 8x8 cell it enters (affine_rot_run, its
+  constants in one struct so the walk's values stay in registers: 18
+  instructions a pixel inside a cell against ~26 and four stack accesses).
+  Every frame identical on Mario Kart, F-Zero, WarioWare: Twisted! and from
+  Mario Golf: Advance Tour and Mario & Luigi save states. Device, Mario
+  Golf's field (two rotated layers, 92% of pixels in the previous pixel's
+  cell): drawing -27% per drawn frame (1.90M -> 1.39M cycles), frames drawn
+  38% -> 50%. The walks are RAM code next to the renderers; the code now
+  ends past .bss's pin, so .bss starts 4 KB later (same place mod 4 KB):
+  4 KB less RAM after the core.
+
 - **The GBA's real frame rate, 59.7275 Hz** (280,896 cycles of 16.78 MHz).
   Every sample a frame produces (803.65 on average at 48 kHz) goes into the
   firmware's interrupt-fed audio ring, and the loop paces on that ring, so
