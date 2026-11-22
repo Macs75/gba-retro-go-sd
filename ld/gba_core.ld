@@ -199,7 +199,19 @@ SECTIONS
     /* code added to an older RAM function's job after the renderers were
      * placed: here, behind them, so they do not move (the idle search's
      * calling loops, gba_idle.c IDLE_LATE) */
+    __gba_late_text_start = .;
     *(.gba_late_text*)
+    /* a fixed slot, so what follows keeps its address whatever the late
+     * code's size */
+    ASSERT(. <= __gba_late_text_start + 0x250, "Error: .gba_late_text outgrew its 0x250-byte slot");
+    . = __gba_late_text_start + 0x250;
+    /* The blended screens' unrotated rotate/scale layer (the 32-bit indexed
+     * instances, wrapping, no mosaic) and their dispatchers, out of the
+     * flash: Wing Commander: Prophecy's cockpit draws its 3D layer through
+     * them, the largest of its drawing (2026-11-22). Behind everything, so
+     * nothing moves. */
+    build/video.o (.text._Z22render_scanline_affineIjL8rendtype1E*)
+    build/video.o (.text._Z24render_affine_backgroundIjL8rendtype1ELb?ELb1ELb0ELb0EEv*)
     . = ALIGN(8);
   } >RAM_EMU
 

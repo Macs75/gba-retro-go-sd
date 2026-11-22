@@ -154,6 +154,14 @@ attached to the release:
 
 ### Changed
 
+- **The blended screens' unrotated rotate/scale layer draws from RAM**: the
+  32-bit indexed-colour instances (wrapping, no mosaic) and their
+  dispatchers left the flash, where their cost moved with gba.xip's place.
+  Wing Commander: Prophecy's cockpit draws its 3D layer through them: -9.5%
+  drawing per drawn frame there, 53 -> 58 fps. Behind the RAM code, after
+  the late code, which now has a fixed 0x250-byte slot so what follows
+  keeps its address.
+
 - **Rotated layers draw a cell at a time.** A rotated, unmosaiced layer
   (modes 1 and 2) now computes once per line which of its pixels fall on
   the map (exactly, in integers: no bounds test per pixel), and walks them
