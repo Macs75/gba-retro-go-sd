@@ -50,6 +50,7 @@ uint64_t hle_vrally3_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 uint64_t hle_spf2_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 uint64_t hle_rzw_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 uint64_t hle_mgolf_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
+uint64_t hle_wcp_run(uint32_t pc, int32_t cycles, uint32_t nzcv);
 
 #ifdef __cplusplus
 }

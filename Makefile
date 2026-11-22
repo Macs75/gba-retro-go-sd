@@ -50,7 +50,8 @@ src/gpsp/video.cc \
 src/hle/hle_vrally3.cc \
 src/hle/hle_spf2.cc \
 src/hle/hle_rzw.cc \
-src/hle/hle_mgolf.cc
+src/hle/hle_mgolf.cc \
+src/hle/hle_wcp.cc
 
 CORE_ASM_SOURCES := \
 src/porting/gba_bios.S
@@ -94,7 +95,7 @@ PACKED_BIN  := $(CORE_NAME).bin
 XIP_BIN     := $(CORE_NAME).xip
 # The game HLE overlays (ld/gba_core.ld OVERLAY), stored in gba.xip after the
 # flash data: one per src/hle/hle_<game>.cc.
-GBA_HLE_OVERLAYS := gba_hle_vrally3 gba_hle_spf2 gba_hle_rzw gba_hle_mgolf
+GBA_HLE_OVERLAYS := gba_hle_vrally3 gba_hle_spf2 gba_hle_rzw gba_hle_mgolf gba_hle_wcp
 PAD_LOGO    := src/assets/pad.bmp
 HEADER_LOGO := src/assets/header.bmp
 
@@ -206,6 +207,7 @@ $(BUILD_DIR)/hle_vrally3.o:      OPT := -O2
 $(BUILD_DIR)/hle_spf2.o:         OPT := -O2
 $(BUILD_DIR)/hle_rzw.o:          OPT := -O2
 $(BUILD_DIR)/hle_mgolf.o:        OPT := -Os
+$(BUILD_DIR)/hle_wcp.o:          OPT := -Os
 $(BUILD_DIR)/sound.o:            OPT := -O2
 $(BUILD_DIR)/gba_bios_hle.o:     OPT := -O2
 # the bundled BIOS is .incbin'd (src/porting/gba_bios.S): a change to the
